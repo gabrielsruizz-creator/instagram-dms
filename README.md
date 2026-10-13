@@ -21,8 +21,10 @@ excluir de uma vez**.
 
 ## Como usar
 
-Você precisa do **Python 3.10 ou mais novo** ([python.org/downloads](https://www.python.org/downloads/);
-no Windows, marque “Add Python to PATH” na instalação).
+Você precisa do **Python entre 3.10 e 3.14**. Versões mais novas ainda não funcionam porque
+algumas dependências não têm pacote pronto para elas. No Windows, o jeito mais fácil é rodar no
+PowerShell: `winget install -e --id Python.Python.3.13` (o `iniciar.bat` escolhe sozinho a versão
+compatível, mesmo que você tenha outras instaladas).
 
 1. Baixe este repositório (botão verde **Code → Download ZIP**) e descompacte.
 2. Abra a pasta e rode:
