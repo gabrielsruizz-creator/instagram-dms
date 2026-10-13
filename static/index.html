@@ -1,0 +1,145 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Limpador de DMs</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <!-- Carregando -->
+  <section id="screen-loading" class="screen center">
+    <div class="spinner"></div>
+    <p class="muted" id="loading-text">Conectando…</p>
+  </section>
+
+  <!-- Login -->
+  <section id="screen-login" class="screen center" hidden>
+    <form id="login-form" class="card">
+      <h1>Limpador de DMs</h1>
+      <p class="muted">Entre com sua conta do Instagram para ver e excluir conversas em massa.</p>
+      <label>Usuário
+        <input name="username" autocomplete="username" placeholder="seu_usuario" required>
+      </label>
+      <label>Senha
+        <input name="password" type="password" autocomplete="current-password" required>
+      </label>
+      <p class="error" id="login-error" hidden></p>
+      <button class="btn primary" type="submit">Entrar</button>
+      <p class="small muted">
+        Sua senha vai direto deste computador para o Instagram e não é salva.
+        Fica salvo só o login (arquivo <code>session.json</code>) para você não precisar entrar toda vez.
+      </p>
+    </form>
+  </section>
+
+  <!-- Código 2FA / verificação -->
+  <section id="screen-code" class="screen center" hidden>
+    <form id="code-form" class="card">
+      <h1>Código de verificação</h1>
+      <p class="muted" id="code-help">Digite o código que o Instagram enviou.</p>
+      <label>Código
+        <input name="code" inputmode="numeric" autocomplete="one-time-code" maxlength="8" required>
+      </label>
+      <p class="error" id="code-error" hidden></p>
+      <button class="btn primary" type="submit">Confirmar</button>
+    </form>
+  </section>
+
+  <!-- App -->
+  <section id="screen-app" class="screen" hidden>
+    <header class="topbar">
+      <div class="brand">Limpador de DMs</div>
+      <div class="me">
+        <span id="me-username"></span>
+        <button class="btn ghost" id="logout-btn">Sair</button>
+      </div>
+    </header>
+
+    <div class="toolbar">
+      <div class="tabs" role="tablist">
+        <button class="tab active" data-folder="inbox">Conversas <span class="count" id="count-inbox">0</span></button>
+        <button class="tab" data-folder="pending">Pedidos <span class="count" id="count-pending">0</span></button>
+      </div>
+      <input type="search" id="search" placeholder="Buscar por nome, @usuário ou mensagem…">
+      <div class="filters">
+        <select id="filter-type" title="Tipo de conversa">
+          <option value="all">Todas</option>
+          <option value="single">Só individuais</option>
+          <option value="group">Só grupos</option>
+        </select>
+        <select id="filter-age" title="Última atividade">
+          <option value="0">Qualquer data</option>
+          <option value="7">Paradas há +7 dias</option>
+          <option value="30">Paradas há +30 dias</option>
+          <option value="90">Paradas há +3 meses</option>
+          <option value="180">Paradas há +6 meses</option>
+          <option value="365">Paradas há +1 ano</option>
+        </select>
+        <select id="filter-last" title="Quem mandou a última mensagem">
+          <option value="all">Última msg de qualquer um</option>
+          <option value="me">Última msg minha</option>
+          <option value="them">Última msg da outra pessoa</option>
+        </select>
+      </div>
+    </div>
+
+    <div class="listbar">
+      <label class="check">
+        <input type="checkbox" id="select-all">
+        <span>Selecionar todas as <b id="visible-count">0</b> visíveis</span>
+      </label>
+      <span class="muted small" id="load-status"></span>
+      <button class="btn ghost small" id="reload-btn">Recarregar</button>
+    </div>
+
+    <ul id="thread-list" class="thread-list"></ul>
+    <p id="empty" class="muted center-text" hidden>Nenhuma conversa encontrada.</p>
+
+    <footer class="actionbar" id="actionbar" hidden>
+      <span><b id="selected-count">0</b> selecionada(s)</span>
+      <div>
+        <button class="btn ghost" id="clear-selection">Limpar seleção</button>
+        <button class="btn danger" id="delete-btn">Excluir selecionadas</button>
+      </div>
+    </footer>
+  </section>
+
+  <!-- Confirmação -->
+  <dialog id="confirm-dialog">
+    <form method="dialog" class="dialog-body">
+      <h2>Excluir <span id="confirm-count"></span> conversa(s)?</h2>
+      <p class="muted">
+        Elas somem da <b>sua</b> caixa de entrada (como no botão “Excluir conversa” do app).
+        A outra pessoa continua vendo a conversa. Isso não pode ser desfeito.
+      </p>
+      <ul id="confirm-preview" class="confirm-preview"></ul>
+      <div class="dialog-actions">
+        <button class="btn ghost" value="cancel">Cancelar</button>
+        <button class="btn danger" value="ok" id="confirm-ok">Sim, excluir</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- Progresso -->
+  <dialog id="progress-dialog">
+    <div class="dialog-body">
+      <h2 id="progress-title">Excluindo…</h2>
+      <div class="progress"><div class="progress-fill" id="progress-fill"></div></div>
+      <p id="progress-text" class="muted"></p>
+      <p class="small muted" id="progress-hint">
+        Tem uma pausa de alguns segundos entre cada exclusão para o Instagram não bloquear sua conta.
+      </p>
+      <ul id="progress-errors" class="error-list"></ul>
+      <div class="dialog-actions">
+        <button class="btn ghost" id="cancel-job">Parar</button>
+        <button class="btn primary" id="close-progress" hidden>Fechar</button>
+      </div>
+    </div>
+  </dialog>
+
+  <div id="toast" class="toast" hidden></div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

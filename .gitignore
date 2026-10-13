@@ -1,0 +1,8 @@
+# Login salvo do Instagram — NUNCA envie para o GitHub
+session.json
+
+.venv/
+venv/
+__pycache__/
+*.pyc
+.DS_Store
