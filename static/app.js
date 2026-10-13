@@ -156,6 +156,7 @@ async function loadAll() {
   if (state.loading) return;
   state.loading = true;
   state.loadError = null;
+  renderList();
   updateLoadStatus();
   try {
     for (const folder of ["inbox", "pending"]) {
@@ -169,7 +170,6 @@ async function loadAll() {
         }
         state.cursors[folder] = data.cursor;
         if (!data.cursor || !data.threads.length) state.done[folder] = true;
-        renderList();
         updateLoadStatus();
       }
     }
@@ -182,6 +182,7 @@ async function loadAll() {
     }
   } finally {
     state.loading = false;
+    renderList();
     updateLoadStatus();
   }
 }
@@ -190,6 +191,7 @@ function updateLoadStatus() {
   const total = state.threads.inbox.length + state.threads.pending.length;
   const el = $("#load-status");
   const btn = $("#reload-btn");
+  $("#loading-count").textContent = total;
   if (state.loading) {
     el.textContent = `Carregando… ${total} conversas`;
     btn.disabled = true;
@@ -328,7 +330,11 @@ function threadRow(t, index) {
 }
 
 function renderList() {
-  state.visible = filteredThreads();
+  // Enquanto carrega, mostra só o contador; a lista aparece inteira no final.
+  $("#loading-panel").hidden = !state.loading;
+  $("#thread-list").hidden = state.loading;
+  $("#select-all").disabled = state.loading;
+  state.visible = state.loading ? [] : filteredThreads();
   const list = $("#thread-list");
   const frag = document.createDocumentFragment();
   state.visible.forEach((t, i) => frag.appendChild(threadRow(t, i)));

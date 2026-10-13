@@ -132,6 +132,14 @@ input:focus, select:focus { outline: 2px solid var(--primary); outline-offset: -
 .check { flex-direction: row; align-items: center; gap: 10px; color: var(--text); font-size: 14px; cursor: pointer; }
 .check input, .thread input { width: 18px; height: 18px; accent-color: var(--primary); cursor: pointer; padding: 0; }
 
+.loading-panel {
+  display: flex; flex-direction: column; align-items: center; gap: 4px;
+  padding: 48px 16px; text-align: center;
+}
+.loading-panel .spinner { margin-bottom: 12px; }
+.loading-panel p { margin: 0; }
+.loading-panel .small { margin-top: 8px; max-width: 360px; }
+
 .thread-list { list-style: none; margin: 0; padding: 0; }
 .thread {
   display: flex; align-items: center; gap: 12px;
