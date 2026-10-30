@@ -10,6 +10,15 @@ for %%V in (3.13 3.12 3.14 3.11 3.10) do (
     py -%%V -c "import sys" >nul 2>&1 && set "PY=py -%%V"
   )
 )
+rem Sem o atalho "py": procura nas pastas onde o instalador costuma colocar o Python.
+for %%N in (313 312 314 311 310) do (
+  if not defined PY (
+    if exist "%LOCALAPPDATA%\Programs\Python\Python%%N\python.exe" set "PY="%LOCALAPPDATA%\Programs\Python\Python%%N\python.exe""
+  )
+  if not defined PY (
+    if exist "%ProgramFiles%\Python%%N\python.exe" set "PY="%ProgramFiles%\Python%%N\python.exe""
+  )
+)
 if not defined PY (
   echo.
   echo Nao encontrei um Python entre 3.10 e 3.14 neste computador.
