@@ -4,16 +4,96 @@ const $ = (sel) => document.querySelector(sel);
 const $$ = (sel) => Array.from(document.querySelectorAll(sel));
 
 const state = {
+  section: "dms", // dms | nfb (não me seguem de volta) | fnb (não sigo de volta)
+  delays: {},
+  // Mensagens
   folder: "inbox",
   threads: { inbox: [], pending: [] },
   cursors: { inbox: null, pending: null },
   done: { inbox: false, pending: false },
   loading: false,
   loadError: null,
-  selected: new Set(),
-  visible: [],
-  lastClickedIndex: null,
   removedByJob: new Set(),
+  // Seguidores / seguindo
+  people: emptyPeople(),
+};
+
+function emptyPeople() {
+  return {
+    followers: [],
+    following: [],
+    cursors: { followers: null, following: null },
+    done: { followers: false, following: false },
+    totals: { followers: null, following: null },
+    loading: false,
+    loadError: null,
+  };
+}
+
+// Cada lista tem sua própria seleção.
+const views = {
+  dms: { list: "#thread-list", selectAll: "#select-all", selected: new Set(), visible: [], lastClickedIndex: null },
+  nfb: { list: "#people-list", selectAll: "#people-select-all", selected: new Set(), visible: [], lastClickedIndex: null },
+  fnb: { list: "#people-list", selectAll: "#people-select-all", selected: new Set(), visible: [], lastClickedIndex: null },
+};
+const currentView = () => views[state.section];
+
+// O que cada botão da barra de baixo faz.
+const ACTIONS = {
+  delete_threads: {
+    button: "Excluir selecionadas",
+    buttonClass: "danger",
+    endpoint: "/api/delete",
+    bodyKey: "thread_ids",
+    title: (n) => `Excluir ${n} conversa(s)?`,
+    text: "Elas somem da sua caixa de entrada (como no botão “Excluir conversa” do app). "
+      + "A outra pessoa continua vendo a conversa. Isso não pode ser desfeito.",
+    ok: "Sim, excluir",
+    okClass: "danger",
+    progress: "Excluindo…",
+  },
+  unfollow: {
+    button: "Deixar de seguir",
+    buttonClass: "danger",
+    endpoint: "/api/people/action",
+    bodyKey: "user_ids",
+    title: (n) => `Deixar de seguir ${n} pessoa(s)?`,
+    text: "Você para de seguir essas contas. Se alguma for privada, para seguir de novo vai precisar pedir outra vez.",
+    ok: "Sim, deixar de seguir",
+    okClass: "danger",
+    progress: "Deixando de seguir…",
+    risky: true,
+  },
+  remove_follower: {
+    button: "Remover seguidor",
+    buttonClass: "ghost",
+    endpoint: "/api/people/action",
+    bodyKey: "user_ids",
+    title: (n) => `Remover ${n} seguidor(es)?`,
+    text: "Essas pessoas deixam de te seguir. O Instagram não avisa elas.",
+    ok: "Sim, remover",
+    okClass: "danger",
+    progress: "Removendo seguidores…",
+    risky: true,
+  },
+  follow: {
+    button: "Seguir de volta",
+    buttonClass: "primary",
+    endpoint: "/api/people/action",
+    bodyKey: "user_ids",
+    title: (n) => `Seguir ${n} pessoa(s) de volta?`,
+    text: "Você passa a seguir essas contas. Nas privadas, vai um pedido para seguir.",
+    ok: "Sim, seguir",
+    okClass: "primary",
+    progress: "Seguindo…",
+    risky: true,
+  },
+};
+
+const SECTION_ACTIONS = {
+  dms: ["delete_threads"],
+  nfb: ["unfollow"],
+  fnb: ["remove_follower", "follow"],
 };
 
 // ------------------------------------------------------------------ API ---
@@ -57,12 +137,25 @@ function showError(el, msg) {
   el.hidden = !msg;
 }
 
+const numberFmt = new Intl.NumberFormat("pt-BR");
+const fmt = (n) => numberFmt.format(n);
+
+function formatDuration(seconds) {
+  const min = Math.round(seconds / 60);
+  if (min < 1) return "menos de 1 minuto";
+  if (min < 60) return `cerca de ${min} minuto(s)`;
+  const h = Math.floor(min / 60);
+  const m = min % 60;
+  return m ? `cerca de ${h} h ${m} min` : `cerca de ${h} h`;
+}
+
 // -------------------------------------------------------------- Login ---
 
 async function waitForLogin() {
   // Fica consultando o servidor até o login sair do estado "working".
   for (;;) {
-    const { login, job } = await api("/api/status");
+    const { login, job, delays } = await api("/api/status");
+    if (delays) state.delays = delays;
     if (login.status === "working") {
       show("loading");
       $("#loading-text").textContent = login.username ? `Entrando como @${login.username}…` : "Conectando…";
@@ -79,6 +172,7 @@ function routeLogin(login, job) {
     $("#me-username").textContent = `@${login.username}`;
     show("app");
     if (!state.threads.inbox.length && !state.loading) loadAll();
+    if (state.section !== "dms" && !peopleReady() && !state.people.loading) loadPeople();
     if (job && job.status === "running") watchJob();
   } else if (login.status === "need_2fa" || login.status === "need_challenge") {
     const help = login.status === "need_2fa"
@@ -135,12 +229,32 @@ $("#logout-btn").addEventListener("click", async () => {
   try {
     await api("/api/logout", { body: {} });
     resetThreads();
-    renderList();
+    state.people = emptyPeople();
+    for (const v of Object.values(views)) v.selected.clear();
+    render();
     show("login");
   } catch (err) {
     toast(err.message);
   }
 });
+
+// ---------------------------------------------------------- Seções ---
+
+for (const tab of $$(".section-tab")) {
+  tab.addEventListener("click", () => {
+    state.section = tab.dataset.section;
+    for (const t of $$(".section-tab")) t.classList.toggle("active", t === tab);
+    $("#section-dms").hidden = state.section !== "dms";
+    $("#section-people").hidden = state.section === "dms";
+    if (state.section !== "dms" && !peopleReady() && !state.people.loading && !state.people.loadError) loadPeople();
+    render();
+  });
+}
+
+function render() {
+  if (state.section === "dms") renderDms(); else renderPeople();
+  renderActionBar();
+}
 
 // ---------------------------------------------------------- Conversas ---
 
@@ -148,7 +262,7 @@ function resetThreads() {
   state.threads = { inbox: [], pending: [] };
   state.cursors = { inbox: null, pending: null };
   state.done = { inbox: false, pending: false };
-  state.selected.clear();
+  views.dms.selected.clear();
   state.loadError = null;
 }
 
@@ -156,7 +270,7 @@ async function loadAll() {
   if (state.loading) return;
   state.loading = true;
   state.loadError = null;
-  renderList();
+  render();
   updateLoadStatus();
   try {
     for (const folder of ["inbox", "pending"]) {
@@ -182,7 +296,7 @@ async function loadAll() {
     }
   } finally {
     state.loading = false;
-    renderList();
+    render();
     updateLoadStatus();
   }
 }
@@ -191,32 +305,30 @@ function updateLoadStatus() {
   const total = state.threads.inbox.length + state.threads.pending.length;
   const el = $("#load-status");
   const btn = $("#reload-btn");
-  $("#loading-count").textContent = total;
+  $("#loading-count").textContent = fmt(total);
   if (state.loading) {
-    el.textContent = `Carregando… ${total} conversas`;
+    el.textContent = `Carregando… ${fmt(total)} conversas`;
     btn.disabled = true;
   } else if (state.loadError) {
-    el.textContent = `Parou em ${total} conversas.`;
+    el.textContent = `Parou em ${fmt(total)} conversas.`;
     btn.textContent = "Continuar carregando";
     btn.disabled = false;
   } else {
-    el.textContent = `${total} conversas carregadas`;
+    el.textContent = `${fmt(total)} conversas carregadas`;
     btn.textContent = "Recarregar";
     btn.disabled = false;
   }
-  $("#count-inbox").textContent = state.threads.inbox.length;
-  $("#count-pending").textContent = state.threads.pending.length;
+  $("#count-inbox").textContent = fmt(state.threads.inbox.length);
+  $("#count-pending").textContent = fmt(state.threads.pending.length);
 }
 
 $("#reload-btn").addEventListener("click", () => {
   if (!state.loadError) {
     resetThreads();
-    renderList();
+    render();
   }
   loadAll();
 });
-
-// ----------------------------------------------------------- Filtros ---
 
 function normalize(s) {
   return (s || "").toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "");
@@ -244,19 +356,17 @@ function filteredThreads() {
 }
 
 for (const el of ["#search", "#filter-type", "#filter-age", "#filter-last"]) {
-  $(el).addEventListener("input", () => { state.lastClickedIndex = null; renderList(); });
+  $(el).addEventListener("input", () => { views.dms.lastClickedIndex = null; render(); });
 }
 
 for (const tab of $$(".tab")) {
   tab.addEventListener("click", () => {
     state.folder = tab.dataset.folder;
-    state.lastClickedIndex = null;
+    views.dms.lastClickedIndex = null;
     for (const t of $$(".tab")) t.classList.toggle("active", t === tab);
-    renderList();
+    render();
   });
 }
-
-// ------------------------------------------------------------ Lista ---
 
 const dateFmt = new Intl.DateTimeFormat("pt-BR", { day: "2-digit", month: "short", year: "numeric" });
 
@@ -270,11 +380,10 @@ function formatDate(iso) {
   return dateFmt.format(d);
 }
 
-function avatarFor(t) {
+function avatar(name, pic, fallback) {
   const el = document.createElement("div");
   el.className = "avatar";
-  const initial = (t.title || "?").trim().charAt(0).toUpperCase();
-  const pic = t.users.length === 1 ? t.users[0].pic : null;
+  const initial = (name || "?").trim().charAt(0).toUpperCase();
   if (pic) {
     const img = document.createElement("img");
     img.src = pic;
@@ -284,32 +393,39 @@ function avatarFor(t) {
     img.onerror = () => { el.textContent = initial; };
     el.appendChild(img);
   } else {
-    el.textContent = t.is_group ? "👥" : initial;
+    el.textContent = fallback || initial;
   }
   return el;
 }
 
-function threadRow(t, index) {
-  const li = document.createElement("li");
-  li.className = "thread" + (state.selected.has(t.id) ? " selected" : "");
-  li.dataset.index = index;
+function badge(text) {
+  const b = document.createElement("span");
+  b.className = "badge";
+  b.textContent = text;
+  return b;
+}
 
+function rowShell(index, selected) {
+  const li = document.createElement("li");
+  li.className = "thread" + (selected ? " selected" : "");
+  li.dataset.index = index;
   const cb = document.createElement("input");
   cb.type = "checkbox";
-  cb.checked = state.selected.has(t.id);
+  cb.checked = selected;
   cb.tabIndex = -1;
+  li.appendChild(cb);
+  return li;
+}
+
+function threadRow(t, index, selected) {
+  const li = rowShell(index, selected);
 
   const main = document.createElement("div");
   main.className = "thread-main";
   const title = document.createElement("div");
   title.className = "thread-title";
   title.textContent = t.title;
-  if (t.is_group) {
-    const b = document.createElement("span");
-    b.className = "badge";
-    b.textContent = "grupo";
-    title.appendChild(b);
-  }
+  if (t.is_group) title.appendChild(badge("grupo"));
   if (t.users.length === 1 && t.users[0].full_name && t.users[0].full_name !== t.title) {
     const n = document.createElement("span");
     n.className = "muted small";
@@ -325,118 +441,337 @@ function threadRow(t, index) {
   date.className = "thread-date";
   date.textContent = formatDate(t.last_activity);
 
-  li.append(cb, avatarFor(t), main, date);
+  const pic = t.users.length === 1 ? t.users[0].pic : null;
+  li.append(avatar(t.title, pic, t.is_group ? "👥" : null), main, date);
   return li;
 }
 
-function renderList() {
+function renderDms() {
   // Enquanto carrega, mostra só o contador; a lista aparece inteira no final.
   $("#loading-panel").hidden = !state.loading;
   $("#thread-list").hidden = state.loading;
   $("#select-all").disabled = state.loading;
-  state.visible = state.loading ? [] : filteredThreads();
-  const list = $("#thread-list");
+  const items = state.loading ? [] : filteredThreads();
+  renderRows(views.dms, items, threadRow);
+  $("#empty").hidden = items.length > 0 || state.loading;
+  $("#visible-count").textContent = fmt(items.length);
+}
+
+// ------------------------------------------------ Seguidores / seguindo ---
+
+function peopleReady() {
+  return state.people.done.followers && state.people.done.following;
+}
+
+function peopleDiff() {
+  const p = state.people;
+  const followerIds = new Set(p.followers.map((u) => u.id));
+  const followingIds = new Set(p.following.map((u) => u.id));
+  return {
+    nfb: p.following.filter((u) => !followerIds.has(u.id)),
+    fnb: p.followers.filter((u) => !followingIds.has(u.id)),
+  };
+}
+
+async function loadPeople() {
+  const p = state.people;
+  if (p.loading) return;
+  p.loading = true;
+  p.loadError = null;
+  render();
+  updatePeopleStatus();
+  try {
+    for (const which of ["followers", "following"]) {
+      while (!p.done[which]) {
+        const params = new URLSearchParams({ list: which });
+        if (p.cursors[which]) params.set("cursor", p.cursors[which]);
+        const data = await api(`/api/people?${params}`);
+        if (data.total != null) p.totals[which] = data.total;
+        const known = new Set(p[which].map((u) => u.id));
+        for (const u of data.users) if (!known.has(u.id)) p[which].push(u);
+        p.cursors[which] = data.cursor;
+        if (!data.cursor || !data.users.length) p.done[which] = true;
+        updatePeopleStatus();
+      }
+    }
+  } catch (err) {
+    p.loadError = err.message;
+    if (err.status === 401) await waitForLogin();
+  } finally {
+    p.loading = false;
+    render();
+    updatePeopleStatus();
+  }
+}
+
+function updatePeopleStatus() {
+  const p = state.people;
+  const ready = peopleReady();
+  const diff = ready ? peopleDiff() : null;
+  $("#count-nfb").textContent = diff ? fmt(diff.nfb.length) : "";
+  $("#count-fnb").textContent = diff ? fmt(diff.fnb.length) : "";
+  for (const which of ["followers", "following"]) {
+    $(`#people-count-${which}`).textContent = fmt(p[which].length);
+    $(`#people-total-${which}`).textContent = p.totals[which] != null ? ` de ${fmt(p.totals[which])}` : "";
+  }
+  const status = $("#people-status");
+  const btn = $("#people-reload-btn");
+  btn.disabled = p.loading;
+  if (p.loading) status.textContent = "Carregando…";
+  else if (ready) status.textContent = `${fmt(p.followers.length)} seguidores · seguindo ${fmt(p.following.length)}`;
+  else status.textContent = "";
+}
+
+function resetPeopleAndLoad() {
+  state.people = emptyPeople();
+  views.nfb.selected.clear();
+  views.fnb.selected.clear();
+  loadPeople();
+}
+
+$("#people-reload-btn").addEventListener("click", resetPeopleAndLoad);
+$("#people-continue-btn").addEventListener("click", () => loadPeople());
+
+function filteredPeople() {
+  const list = peopleDiff()[state.section];
+  const q = normalize($("#people-search").value.trim());
+  const hideVerified = $("#hide-verified").checked;
+  return list.filter((u) => {
+    if (hideVerified && u.is_verified) return false;
+    if (q && !normalize(`${u.username} ${u.full_name}`).includes(q)) return false;
+    return true;
+  });
+}
+
+for (const el of ["#people-search", "#hide-verified"]) {
+  $(el).addEventListener("input", () => { currentView().lastClickedIndex = null; render(); });
+}
+
+function personRow(u, index, selected) {
+  const li = rowShell(index, selected);
+
+  const main = document.createElement("div");
+  main.className = "thread-main";
+  const title = document.createElement("div");
+  title.className = "thread-title";
+  const link = document.createElement("a");
+  link.href = `https://www.instagram.com/${encodeURIComponent(u.username)}/`;
+  link.target = "_blank";
+  link.rel = "noopener noreferrer";
+  link.className = "profile-link";
+  link.textContent = u.username;
+  link.title = "Abrir perfil no Instagram";
+  title.appendChild(link);
+  if (u.is_verified) title.appendChild(badge("verificada"));
+  if (u.is_private) title.appendChild(badge("privada"));
+  const sub = document.createElement("div");
+  sub.className = "thread-sub";
+  sub.textContent = u.full_name || " ";
+  main.append(title, sub);
+
+  li.append(avatar(u.username, u.pic), main);
+  return li;
+}
+
+const PEOPLE_HELP = {
+  nfb: "Pessoas que você segue, mas que não te seguem de volta.",
+  fnb: "Pessoas que te seguem, mas que você não segue de volta.",
+};
+
+function renderPeople() {
+  const p = state.people;
+  const ready = peopleReady();
+  $("#people-help").textContent = PEOPLE_HELP[state.section];
+  $("#people-loading").hidden = !p.loading;
+  $("#people-error").hidden = p.loading || !p.loadError;
+  $("#people-error-text").textContent = p.loadError || "";
+  $("#people-select-all").disabled = !ready;
+  $("#people-list").hidden = !ready;
+
+  const items = ready ? filteredPeople() : [];
+  renderRows(currentView(), items, personRow);
+  $("#people-empty").hidden = !ready || items.length > 0;
+  $("#people-visible-count").textContent = fmt(items.length);
+
+  // O Instagram às vezes entrega menos seguidores do que o total do perfil.
+  const warn = $("#people-warning");
+  const total = p.totals.followers;
+  const missing = ready && total ? total - p.followers.length : 0;
+  if (state.section === "nfb" && missing > Math.max(5, total * 0.02)) {
+    warn.textContent = `Atenção: o Instagram só entregou ${fmt(p.followers.length)} dos seus ${fmt(total)} seguidores. `
+      + "Algumas pessoas podem aparecer aqui por engano. Confira antes de deixar de seguir, ou clique em Recarregar.";
+    warn.hidden = false;
+  } else {
+    warn.hidden = true;
+  }
+}
+
+// ------------------------------------------------------------ Seleção ---
+
+function renderRows(view, items, rowFn) {
+  view.visible = items;
   const frag = document.createDocumentFragment();
-  state.visible.forEach((t, i) => frag.appendChild(threadRow(t, i)));
-  list.replaceChildren(frag);
-  $("#empty").hidden = state.visible.length > 0 || state.loading;
-  $("#visible-count").textContent = state.visible.length;
-  updateSelectionUi();
+  items.forEach((it, i) => frag.appendChild(rowFn(it, i, view.selected.has(it.id))));
+  $(view.list).replaceChildren(frag);
 }
 
-function updateSelectionUi() {
-  const n = state.selected.size;
-  $("#selected-count").textContent = n;
-  $("#actionbar").hidden = n === 0;
-  const visSel = state.visible.filter((t) => state.selected.has(t.id)).length;
-  const all = $("#select-all");
-  all.checked = state.visible.length > 0 && visSel === state.visible.length;
-  all.indeterminate = visSel > 0 && visSel < state.visible.length;
-}
-
-function setRowSelected(index, on) {
-  const t = state.visible[index];
-  if (!t) return;
-  if (on) state.selected.add(t.id); else state.selected.delete(t.id);
-  const li = $(`#thread-list > li[data-index="${index}"]`);
+function setRowSelected(view, index, on) {
+  const item = view.visible[index];
+  if (!item) return;
+  if (on) view.selected.add(item.id); else view.selected.delete(item.id);
+  const li = $(`${view.list} > li[data-index="${index}"]`);
   if (li) {
     li.classList.toggle("selected", on);
     li.querySelector("input").checked = on;
   }
 }
 
-// Clique numa conversa marca/desmarca. Shift+clique marca um intervalo.
-$("#thread-list").addEventListener("click", (e) => {
+function renderActionBar() {
+  const view = currentView();
+  const n = view.selected.size;
+  $("#selected-count").textContent = fmt(n);
+  $("#actionbar").hidden = n === 0;
+
+  const visSel = view.visible.filter((it) => view.selected.has(it.id)).length;
+  const all = $(view.selectAll);
+  all.checked = view.visible.length > 0 && visSel === view.visible.length;
+  all.indeterminate = visSel > 0 && visSel < view.visible.length;
+
+  const buttons = [];
+  const clear = document.createElement("button");
+  clear.className = "btn ghost";
+  clear.textContent = "Limpar seleção";
+  clear.addEventListener("click", () => { view.selected.clear(); render(); });
+  buttons.push(clear);
+  for (const kind of SECTION_ACTIONS[state.section]) {
+    const b = document.createElement("button");
+    b.className = `btn ${ACTIONS[kind].buttonClass}`;
+    b.textContent = ACTIONS[kind].button;
+    b.addEventListener("click", () => openConfirm(kind));
+    buttons.push(b);
+  }
+  $("#action-buttons").replaceChildren(...buttons);
+}
+
+// Clique numa linha marca/desmarca. Shift+clique marca um intervalo.
+function onListClick(e) {
+  if (e.target.closest("a")) return; // link do perfil
   const li = e.target.closest("li.thread");
   if (!li) return;
+  const view = currentView();
   const index = Number(li.dataset.index);
-  const t = state.visible[index];
-  const on = !state.selected.has(t.id);
-  if (e.shiftKey && state.lastClickedIndex !== null) {
-    const [a, b] = [state.lastClickedIndex, index].sort((x, y) => x - y);
-    for (let i = a; i <= b; i++) setRowSelected(i, on);
+  const item = view.visible[index];
+  const on = !view.selected.has(item.id);
+  if (e.shiftKey && view.lastClickedIndex !== null) {
+    const [a, b] = [view.lastClickedIndex, index].sort((x, y) => x - y);
+    for (let i = a; i <= b; i++) setRowSelected(view, i, on);
   } else {
-    setRowSelected(index, on);
+    setRowSelected(view, index, on);
   }
-  state.lastClickedIndex = index;
-  updateSelectionUi();
-});
+  view.lastClickedIndex = index;
+  renderActionBar();
+}
 
-$("#select-all").addEventListener("change", (e) => {
-  for (let i = 0; i < state.visible.length; i++) setRowSelected(i, e.target.checked);
-  updateSelectionUi();
-});
+$("#thread-list").addEventListener("click", onListClick);
+$("#people-list").addEventListener("click", onListClick);
 
-$("#clear-selection").addEventListener("click", () => {
-  state.selected.clear();
-  renderList();
-});
+for (const sel of ["#select-all", "#people-select-all"]) {
+  $(sel).addEventListener("change", (e) => {
+    const view = currentView();
+    for (let i = 0; i < view.visible.length; i++) setRowSelected(view, i, e.target.checked);
+    renderActionBar();
+  });
+}
 
-// ---------------------------------------------------------- Exclusão ---
+// ------------------------------------------------------- Ações em lote ---
 
 function threadById(id) {
   return state.threads.inbox.find((t) => t.id === id) || state.threads.pending.find((t) => t.id === id);
 }
 
-$("#delete-btn").addEventListener("click", () => {
-  const ids = [...state.selected];
-  $("#confirm-count").textContent = ids.length;
-  const preview = $("#confirm-preview");
+function personById(id) {
+  return state.people.following.find((u) => u.id === id) || state.people.followers.find((u) => u.id === id);
+}
+
+function labelFor(kind, id) {
+  if (kind === "delete_threads") return threadById(id)?.title || id;
+  const u = personById(id);
+  return u ? `@${u.username}` : id;
+}
+
+let pendingAction = null;
+
+function openConfirm(kind) {
+  const action = ACTIONS[kind];
+  const ids = [...currentView().selected];
+  pendingAction = { kind, ids };
+
+  $("#confirm-title").textContent = action.title(fmt(ids.length));
+  $("#confirm-text").textContent = action.text;
+  const avg = state.delays[kind];
+  $("#confirm-time").textContent = avg
+    ? `Vai levar ${formatDuration(ids.length * avg)} (uma pausa entre cada uma para o Instagram não bloquear).`
+    : "";
+  const warn = $("#confirm-warning");
+  warn.hidden = !(action.risky && ids.length > 100);
+  warn.textContent = "O Instagram costuma bloquear temporariamente quem segue ou deixa de seguir muita gente "
+    + "no mesmo dia. O mais seguro é fazer em lotes de até 100 por dia.";
+
   const items = ids.slice(0, 50).map((id) => {
     const li = document.createElement("li");
-    li.textContent = threadById(id)?.title || id;
+    li.textContent = labelFor(kind, id);
     return li;
   });
   if (ids.length > 50) {
     const li = document.createElement("li");
     li.className = "muted";
-    li.textContent = `…e mais ${ids.length - 50}`;
+    li.textContent = `…e mais ${fmt(ids.length - 50)}`;
     items.push(li);
   }
-  preview.replaceChildren(...items);
+  $("#confirm-preview").replaceChildren(...items);
+  const ok = $("#confirm-ok");
+  ok.textContent = action.ok;
+  ok.className = `btn ${action.okClass}`;
   $("#confirm-dialog").showModal();
-});
+}
 
 $("#confirm-dialog").addEventListener("close", async () => {
-  if ($("#confirm-dialog").returnValue !== "ok") return;
-  const ids = [...state.selected];
+  if ($("#confirm-dialog").returnValue !== "ok" || !pendingAction) return;
+  const { kind, ids } = pendingAction;
+  pendingAction = null;
+  const action = ACTIONS[kind];
   try {
-    await api("/api/delete", { body: { thread_ids: ids } });
+    await api(action.endpoint, { body: { action: kind, [action.bodyKey]: ids } });
     watchJob();
   } catch (err) {
     toast(err.message);
   }
 });
 
-function removeThreads(ids) {
-  for (const id of ids) {
-    state.removedByJob.add(id);
-    state.selected.delete(id);
-  }
+// Aplica na tela o que já deu certo no servidor.
+function applySucceeded(kind, ids) {
   const gone = new Set(ids);
-  for (const folder of ["inbox", "pending"]) {
-    state.threads[folder] = state.threads[folder].filter((t) => !gone.has(t.id));
+  if (kind === "delete_threads") {
+    for (const id of ids) state.removedByJob.add(id);
+    for (const folder of ["inbox", "pending"]) {
+      state.threads[folder] = state.threads[folder].filter((t) => !gone.has(t.id));
+    }
+    for (const id of ids) views.dms.selected.delete(id);
+    updateLoadStatus();
+  } else {
+    const p = state.people;
+    if (kind === "unfollow") {
+      p.following = p.following.filter((u) => !gone.has(u.id));
+    } else if (kind === "remove_follower") {
+      p.followers = p.followers.filter((u) => !gone.has(u.id));
+    } else if (kind === "follow") {
+      const known = new Set(p.following.map((u) => u.id));
+      for (const u of p.followers) if (gone.has(u.id) && !known.has(u.id)) p.following.push(u);
+    }
+    for (const id of ids) { views.nfb.selected.delete(id); views.fnb.selected.delete(id); }
+    updatePeopleStatus();
   }
+  render();
 }
 
 let watching = false;
@@ -445,12 +780,12 @@ async function watchJob() {
   if (watching) return;
   watching = true;
   const dlg = $("#progress-dialog");
-  $("#progress-title").textContent = "Excluindo…";
   $("#cancel-job").hidden = false;
   $("#cancel-job").disabled = false;
   $("#close-progress").hidden = true;
   $("#progress-errors").replaceChildren();
   $("#progress-hint").hidden = false;
+  $("#progress-title").textContent = "Trabalhando…";
   if (!dlg.open) dlg.showModal();
 
   let applied = 0;
@@ -458,25 +793,33 @@ async function watchJob() {
     for (;;) {
       const { job } = await api("/api/status");
       if (!job) break;
+      const action = ACTIONS[job.kind] || ACTIONS.delete_threads;
+      const avg = state.delays[job.kind] || 0;
       const pct = job.total ? Math.round((job.done / job.total) * 100) : 0;
       $("#progress-fill").style.width = `${pct}%`;
-      $("#progress-text").textContent = `${job.done} de ${job.total} (${job.deleted.length} excluídas)`;
+      const left = (job.total - job.done) * avg;
+      $("#progress-text").textContent = `${fmt(job.done)} de ${fmt(job.total)}`
+        + (job.done < job.total && avg ? ` · falta ${formatDuration(left)}` : "");
+      $("#progress-hint").textContent = avg
+        ? `Tem uma pausa de uns ${Math.round(avg)} segundos entre cada uma para o Instagram não bloquear sua conta. `
+          + "Pode deixar rodando; a janela do app precisa continuar aberta."
+        : "";
 
-      if (job.deleted.length > applied) {
-        removeThreads(job.deleted.slice(applied));
-        applied = job.deleted.length;
-        renderList();
-        updateLoadStatus();
+      if (job.succeeded.length > applied) {
+        applySucceeded(job.kind, job.succeeded.slice(applied));
+        applied = job.succeeded.length;
       }
 
-      if (job.status !== "running") {
+      if (job.status === "running") {
+        $("#progress-title").textContent = action.progress;
+      } else {
         $("#progress-title").textContent =
           job.status === "finished" ? "Pronto!" : job.status === "cancelled" ? "Parado" : "Interrompido";
         $("#progress-text").textContent = job.message || "";
         $("#progress-hint").hidden = true;
         const errs = job.failed.map((f) => {
           const li = document.createElement("li");
-          li.textContent = `${threadById(f.id)?.title || f.id}: ${f.error}`;
+          li.textContent = `${labelFor(job.kind, f.id)}: ${f.error}`;
           return li;
         });
         $("#progress-errors").replaceChildren(...errs);
@@ -499,7 +842,7 @@ $("#cancel-job").addEventListener("click", async () => {
 });
 
 $("#close-progress").addEventListener("click", () => $("#progress-dialog").close());
-// Não deixa fechar com Esc enquanto está excluindo.
+// Não deixa fechar com Esc enquanto está rodando.
 $("#progress-dialog").addEventListener("cancel", (e) => { if (watching) e.preventDefault(); });
 
 // ------------------------------------------------------------- Início ---

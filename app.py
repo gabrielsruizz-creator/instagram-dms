@@ -3,12 +3,14 @@ Limpador de DMs do Instagram.
 
 Servidor local (Flask) que conecta na sua conta do Instagram, lista todas as
 conversas da caixa de entrada e dos pedidos de mensagem e permite excluir
-várias de uma vez.
+várias de uma vez. Também mostra quem não te segue de volta (para deixar de
+seguir) e quem você não segue de volta (para seguir ou remover).
 
 Rode no SEU computador:  python app.py
 O app abre em http://127.0.0.1:8765
 """
 
+import functools
 import logging
 import os
 import queue
@@ -41,6 +43,13 @@ STATIC_DIR = BASE_DIR / "static"
 DELETE_DELAY = (
     float(os.environ.get("DELETE_DELAY_MIN", "1.5")),
     float(os.environ.get("DELETE_DELAY_MAX", "3.5")),
+)
+
+# Seguir/deixar de seguir em massa é o que mais gera bloqueio no Instagram,
+# então a pausa entre essas ações é bem maior.
+FOLLOW_DELAY = (
+    float(os.environ.get("FOLLOW_DELAY_MIN", "12")),
+    float(os.environ.get("FOLLOW_DELAY_MAX", "25")),
 )
 
 RATE_LIMIT_ERRORS = (PleaseWaitFewMinutes, FeedbackRequired, RateLimitError)
@@ -222,7 +231,7 @@ def api_login_code():
 def api_logout():
     with state.lock:
         if state.job and state.job["status"] == "running":
-            return jsonify(error="Espere a exclusão terminar ou cancele antes de sair."), 409
+            return jsonify(error="Espere a ação em andamento terminar ou pare antes de sair."), 409
     state.client = None
     state.pending_credentials = None
     SESSION_FILE.unlink(missing_ok=True)
@@ -233,7 +242,11 @@ def api_logout():
 @app.get("/api/status")
 def api_status():
     with state.lock:
-        return jsonify(login=dict(state.login), job=dict(state.job) if state.job else None)
+        return jsonify(
+            login=dict(state.login),
+            job=dict(state.job) if state.job else None,
+            delays={kind: sum(action[1]) / 2 for kind, action in JOB_ACTIONS.items()},
+        )
 
 
 # --------------------------------------------------------------------------- #
@@ -310,28 +323,39 @@ def require_client() -> Client:
     return cl
 
 
+def instagram_errors(view):
+    """Transforma os erros do Instagram em respostas JSON com mensagem amigável."""
+
+    @functools.wraps(view)
+    def wrapper(*args, **kwargs):
+        try:
+            return view(*args, **kwargs)
+        except LoginRequired as exc:
+            state.client = None
+            state.set_login(status="logged_out", error=friendly_error(exc))
+            return jsonify(error=friendly_error(exc)), 401
+        except RATE_LIMIT_ERRORS as exc:
+            return jsonify(error=friendly_error(exc)), 429
+        except ClientError as exc:
+            log.exception("Erro falando com o Instagram")
+            return jsonify(error=friendly_error(exc)), 502
+
+    return wrapper
+
+
 @app.get("/api/threads")
+@instagram_errors
 def api_threads():
     folder = request.args.get("folder", "inbox")
     cursor = request.args.get("cursor") or None
     if folder not in ("inbox", "pending"):
         return jsonify(error="Pasta inválida."), 400
-    try:
-        cl = require_client()
-        with state.api_lock:
-            if folder == "inbox":
-                threads, next_cursor = cl.direct_threads_chunk(thread_message_limit=1, cursor=cursor)
-            else:
-                threads, next_cursor = cl.direct_pending_chunk(cursor=cursor)
-    except LoginRequired as exc:
-        state.client = None
-        state.set_login(status="logged_out", error=friendly_error(exc))
-        return jsonify(error=friendly_error(exc)), 401
-    except RATE_LIMIT_ERRORS as exc:
-        return jsonify(error=friendly_error(exc)), 429
-    except ClientError as exc:
-        log.exception("Erro listando conversas")
-        return jsonify(error=friendly_error(exc)), 502
+    cl = require_client()
+    with state.api_lock:
+        if folder == "inbox":
+            threads, next_cursor = cl.direct_threads_chunk(thread_message_limit=1, cursor=cursor)
+        else:
+            threads, next_cursor = cl.direct_pending_chunk(cursor=cursor)
 
     me_id = str(cl.user_id)
     # O Instagram às vezes devolve o mesmo cursor no fim da lista.
@@ -344,25 +368,90 @@ def api_threads():
 
 
 # --------------------------------------------------------------------------- #
-# Exclusão em massa
+# Seguidores / seguindo
 # --------------------------------------------------------------------------- #
 
-def _delete_worker(thread_ids: list[str]):
+PEOPLE_PAGE_SIZE = 200
+
+
+def serialize_user(u) -> dict:
+    return {
+        "id": str(u.pk),
+        "username": u.username,
+        "full_name": u.full_name or "",
+        "pic": str(u.profile_pic_url) if u.profile_pic_url else None,
+        "is_private": bool(u.is_private),
+        "is_verified": bool(u.is_verified),
+    }
+
+
+@app.get("/api/people")
+@instagram_errors
+def api_people():
+    which = request.args.get("list")
+    cursor = request.args.get("cursor") or ""
+    if which not in ("followers", "following"):
+        return jsonify(error="Lista inválida."), 400
+    cl = require_client()
+    me = str(cl.user_id)
+    total = None
+    with state.api_lock:
+        if not cursor:
+            # Só para mostrar o progresso ("350 de 1.200"); se falhar, tudo bem.
+            try:
+                info = cl.user_info_v1(me)
+                total = info.follower_count if which == "followers" else info.following_count
+            except Exception:  # noqa: BLE001
+                total = None
+        fetch = cl.user_followers_v1_chunk if which == "followers" else cl.user_following_v1_chunk
+        users, next_cursor = fetch(me, max_amount=PEOPLE_PAGE_SIZE, max_id=cursor)
+
+    if next_cursor == cursor:
+        next_cursor = None
+    return jsonify(users=[serialize_user(u) for u in users], cursor=next_cursor or None, total=total)
+
+
+# --------------------------------------------------------------------------- #
+# Ações em lote (excluir conversas, deixar de seguir, seguir, remover seguidor)
+# --------------------------------------------------------------------------- #
+
+def _follow(cl: Client, user_id: str) -> bool:
+    if cl.user_follow(user_id):
+        return True
+    # Conta privada: o Instagram só registra o pedido para seguir.
+    status = (cl.last_json or {}).get("friendship_status") or {}
+    return bool(status.get("outgoing_request"))
+
+
+# tipo -> (função, pausa entre ações, texto do resultado)
+JOB_ACTIONS = {
+    "delete_threads": (lambda cl, i: cl.direct_thread_hide(i), DELETE_DELAY, "conversa(s) excluída(s)"),
+    "unfollow": (lambda cl, i: cl.user_unfollow(i), FOLLOW_DELAY, "pessoa(s) deixada(s) de seguir"),
+    "follow": (_follow, FOLLOW_DELAY, "pessoa(s) seguida(s)"),
+    "remove_follower": (lambda cl, i: cl.user_remove_follower(i), FOLLOW_DELAY, "seguidor(es) removido(s)"),
+}
+
+
+def _job_worker(kind: str, item_ids: list[str]):
+    action, delay, done_text = JOB_ACTIONS[kind]
     cl = state.client
     job = state.job
-    for index, tid in enumerate(thread_ids):
+    for index, item_id in enumerate(item_ids):
         if state.cancel_job.is_set():
             with state.lock:
-                job.update(status="cancelled", message="Exclusão cancelada.")
+                job.update(
+                    status="cancelled",
+                    message=f"Parado. {len(job['succeeded'])} {done_text} antes de parar.",
+                )
             return
         try:
             with state.api_lock:
-                ok = cl.direct_thread_hide(tid)
+                ok = action(cl, item_id)
             with state.lock:
                 if ok:
-                    job["deleted"].append(tid)
+                    job["succeeded"].append(item_id)
                 else:
-                    job["failed"].append({"id": tid, "error": "O Instagram não confirmou a exclusão."})
+                    job["failed"].append({"id": item_id, "error": "O Instagram não confirmou a ação."})
         except RATE_LIMIT_ERRORS as exc:
             with state.lock:
                 job.update(status="stopped", message=friendly_error(exc))
@@ -374,50 +463,63 @@ def _delete_worker(thread_ids: list[str]):
                 job.update(status="stopped", message=friendly_error(exc))
             return
         except Exception as exc:  # noqa: BLE001
-            log.exception("Erro excluindo %s", tid)
+            log.exception("Erro em %s de %s", kind, item_id)
             with state.lock:
-                job["failed"].append({"id": tid, "error": friendly_error(exc)})
+                job["failed"].append({"id": item_id, "error": friendly_error(exc)})
         finally:
             with state.lock:
-                job["done"] = len(job["deleted"]) + len(job["failed"])
+                job["done"] = len(job["succeeded"]) + len(job["failed"])
 
-        if index < len(thread_ids) - 1:
-            # Espera um pouco entre exclusões; sai antes se cancelarem.
-            state.cancel_job.wait(random.uniform(*DELETE_DELAY))
+        if index < len(item_ids) - 1:
+            # Espera um pouco entre ações; sai antes se cancelarem.
+            state.cancel_job.wait(random.uniform(*delay))
 
     with state.lock:
         failed = len(job["failed"])
         job.update(
             status="finished",
-            message=f"{len(job['deleted'])} conversa(s) excluída(s)" + (f", {failed} com erro." if failed else "."),
+            message=f"{len(job['succeeded'])} {done_text}" + (f", {failed} com erro." if failed else "."),
         )
+
+
+def start_job(kind: str, ids):
+    if not isinstance(ids, list) or not all(isinstance(i, str) and i.isdigit() for i in ids):
+        return jsonify(error="Lista inválida."), 400
+    ids = list(dict.fromkeys(ids))  # remove duplicadas mantendo a ordem
+    if not ids:
+        return jsonify(error="Selecione pelo menos um item."), 400
+    if state.client is None:
+        return jsonify(error="Faça login primeiro."), 401
+    with state.lock:
+        if state.job and state.job["status"] == "running":
+            return jsonify(error="Já existe uma ação em andamento. Espere terminar ou pare antes."), 409
+        state.cancel_job.clear()
+        state.job = {
+            "kind": kind,
+            "status": "running",
+            "total": len(ids),
+            "done": 0,
+            "succeeded": [],
+            "failed": [],
+            "message": None,
+        }
+    threading.Thread(target=_job_worker, args=(kind, ids), daemon=True).start()
+    return jsonify(ok=True)
 
 
 @app.post("/api/delete")
 def api_delete():
     data = request.get_json(force=False) or {}
-    ids = data.get("thread_ids") or []
-    if not isinstance(ids, list) or not all(isinstance(i, str) and i.isdigit() for i in ids):
-        return jsonify(error="Lista de conversas inválida."), 400
-    ids = list(dict.fromkeys(ids))  # remove duplicadas mantendo a ordem
-    if not ids:
-        return jsonify(error="Selecione pelo menos uma conversa."), 400
-    if state.client is None:
-        return jsonify(error="Faça login primeiro."), 401
-    with state.lock:
-        if state.job and state.job["status"] == "running":
-            return jsonify(error="Já existe uma exclusão em andamento."), 409
-        state.cancel_job.clear()
-        state.job = {
-            "status": "running",
-            "total": len(ids),
-            "done": 0,
-            "deleted": [],
-            "failed": [],
-            "message": None,
-        }
-    threading.Thread(target=_delete_worker, args=(ids,), daemon=True).start()
-    return jsonify(ok=True)
+    return start_job("delete_threads", data.get("thread_ids") or [])
+
+
+@app.post("/api/people/action")
+def api_people_action():
+    data = request.get_json(force=False) or {}
+    kind = data.get("action")
+    if kind not in ("unfollow", "follow", "remove_follower"):
+        return jsonify(error="Ação inválida."), 400
+    return start_job(kind, data.get("user_ids") or [])
 
 
 @app.post("/api/delete/cancel")

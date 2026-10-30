@@ -2,7 +2,8 @@
 
 App que roda no seu computador, conecta na sua conta do Instagram, mostra **todas** as
 conversas (caixa de entrada + pedidos de mensagem) e deixa você **selecionar várias e
-excluir de uma vez**.
+excluir de uma vez**. Também mostra **quem não te segue de volta** (para deixar de seguir em
+lote) e **quem você não segue de volta** (para seguir de volta ou remover o seguidor).
 
 ## O que ele faz
 
@@ -15,6 +16,18 @@ excluir de uma vez**.
   “grupos parados há +1 ano” → selecionar todas → excluir.
 - Clique numa conversa para marcar; **Shift + clique** marca um intervalo inteiro.
 - Exclusão em lote com barra de progresso, botão de parar e lista de erros.
+
+### Abas de seguidores
+
+- **Não me seguem de volta:** quem você segue e não te segue. Selecione e clique em
+  **Deixar de seguir**.
+- **Não sigo de volta:** quem te segue e você não segue. Dá para **Seguir de volta** ou
+  **Remover seguidor**.
+- Busca por nome/@usuário, opção de esconder contas verificadas (famosos e marcas, que quase
+  nunca seguem de volta) e link para abrir o perfil no Instagram.
+- A lista só aparece depois de carregar todos os seguidores e todos que você segue, para não
+  mostrar ninguém por engano. Se o Instagram entregar bem menos seguidores do que o total do
+  seu perfil, o app avisa para você conferir antes.
 
 “Excluir” aqui é o mesmo que o botão **Excluir conversa** do app: a conversa some da
 **sua** caixa de entrada, mas a outra pessoa continua vendo. Não dá para desfazer.
@@ -60,6 +73,10 @@ python3 -m venv .venv
   conversas por minuto). Para muitas conversas, prefira lotes de algumas centenas. Se aparecer
   “O Instagram limitou as requisições”, espere de 30 minutos a algumas horas antes de continuar.
   Dá para mudar a pausa com as variáveis de ambiente `DELETE_DELAY_MIN` e `DELETE_DELAY_MAX`.
+- **Seguir e deixar de seguir em massa é o que mais gera bloqueio.** Por isso a pausa entre cada
+  uma dessas ações é de 12 a 25 segundos (umas 3 por minuto). Faça **no máximo umas 100 por dia**;
+  se o Instagram bloquear, espere 24 horas. A pausa pode ser mudada com `FOLLOW_DELAY_MIN` e
+  `FOLLOW_DELAY_MAX`.
 - **Sua senha** vai direto do seu computador para o Instagram e não é gravada. O app guarda só
   a sessão de login em `session.json` (na pasta do projeto) para você não ter que entrar toda vez.
   Esse arquivo dá acesso à sua conta: não compartilhe e não suba para o GitHub
@@ -71,7 +88,7 @@ python3 -m venv .venv
 ## Estrutura
 
 ```
-app.py            servidor Flask (login, listagem, exclusão em lote)
+app.py            servidor Flask (login, conversas, seguidores, ações em lote)
 static/           interface (HTML, CSS e JavaScript puro)
 iniciar.bat/.sh   instalam as dependências e abrem o app
 ```

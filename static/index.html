@@ -56,74 +56,119 @@
       </div>
     </header>
 
-    <div class="toolbar">
-      <div class="tabs" role="tablist">
-        <button class="tab active" data-folder="inbox">Conversas <span class="count" id="count-inbox">0</span></button>
-        <button class="tab" data-folder="pending">Pedidos <span class="count" id="count-pending">0</span></button>
+    <nav class="sections" role="tablist">
+      <button class="section-tab active" data-section="dms">Mensagens</button>
+      <button class="section-tab" data-section="nfb">Não me seguem de volta <span class="count" id="count-nfb"></span></button>
+      <button class="section-tab" data-section="fnb">Não sigo de volta <span class="count" id="count-fnb"></span></button>
+    </nav>
+
+    <!-- Mensagens -->
+    <div id="section-dms">
+      <div class="toolbar">
+        <div class="tabs" role="tablist">
+          <button class="tab active" data-folder="inbox">Conversas <span class="count" id="count-inbox">0</span></button>
+          <button class="tab" data-folder="pending">Pedidos <span class="count" id="count-pending">0</span></button>
+        </div>
+        <input type="search" id="search" placeholder="Buscar por nome, @usuário ou mensagem…">
+        <div class="filters">
+          <select id="filter-type" title="Tipo de conversa">
+            <option value="all">Todas</option>
+            <option value="single">Só individuais</option>
+            <option value="group">Só grupos</option>
+          </select>
+          <select id="filter-age" title="Última atividade">
+            <option value="0">Qualquer data</option>
+            <option value="7">Paradas há +7 dias</option>
+            <option value="30">Paradas há +30 dias</option>
+            <option value="90">Paradas há +3 meses</option>
+            <option value="180">Paradas há +6 meses</option>
+            <option value="365">Paradas há +1 ano</option>
+          </select>
+          <select id="filter-last" title="Quem mandou a última mensagem">
+            <option value="all">Última msg de qualquer um</option>
+            <option value="me">Última msg minha</option>
+            <option value="them">Última msg da outra pessoa</option>
+          </select>
+        </div>
       </div>
-      <input type="search" id="search" placeholder="Buscar por nome, @usuário ou mensagem…">
-      <div class="filters">
-        <select id="filter-type" title="Tipo de conversa">
-          <option value="all">Todas</option>
-          <option value="single">Só individuais</option>
-          <option value="group">Só grupos</option>
-        </select>
-        <select id="filter-age" title="Última atividade">
-          <option value="0">Qualquer data</option>
-          <option value="7">Paradas há +7 dias</option>
-          <option value="30">Paradas há +30 dias</option>
-          <option value="90">Paradas há +3 meses</option>
-          <option value="180">Paradas há +6 meses</option>
-          <option value="365">Paradas há +1 ano</option>
-        </select>
-        <select id="filter-last" title="Quem mandou a última mensagem">
-          <option value="all">Última msg de qualquer um</option>
-          <option value="me">Última msg minha</option>
-          <option value="them">Última msg da outra pessoa</option>
-        </select>
+
+      <div class="listbar">
+        <label class="check">
+          <input type="checkbox" id="select-all" data-view="dms">
+          <span>Selecionar todas as <b id="visible-count">0</b> visíveis</span>
+        </label>
+        <span class="muted small" id="load-status"></span>
+        <button class="btn ghost small" id="reload-btn">Recarregar</button>
       </div>
+
+      <div id="loading-panel" class="loading-panel" hidden>
+        <div class="spinner"></div>
+        <p><b>Carregando todas as suas conversas…</b></p>
+        <p class="muted"><b id="loading-count">0</b> encontradas até agora</p>
+        <p class="small muted">A lista aparece completa quando terminar. Com muitas conversas pode levar alguns minutos.</p>
+      </div>
+
+      <ul id="thread-list" class="thread-list"></ul>
+      <p id="empty" class="muted center-text" hidden>Nenhuma conversa encontrada.</p>
     </div>
 
-    <div class="listbar">
-      <label class="check">
-        <input type="checkbox" id="select-all">
-        <span>Selecionar todas as <b id="visible-count">0</b> visíveis</span>
-      </label>
-      <span class="muted small" id="load-status"></span>
-      <button class="btn ghost small" id="reload-btn">Recarregar</button>
-    </div>
+    <!-- Seguidores -->
+    <div id="section-people" hidden>
+      <div class="toolbar">
+        <p class="muted small" id="people-help"></p>
+        <input type="search" id="people-search" placeholder="Buscar por nome ou @usuário…">
+        <label class="check small">
+          <input type="checkbox" id="hide-verified">
+          <span>Esconder contas verificadas (famosos, marcas)</span>
+        </label>
+      </div>
 
-    <div id="loading-panel" class="loading-panel" hidden>
-      <div class="spinner"></div>
-      <p><b>Carregando todas as suas conversas…</b></p>
-      <p class="muted"><b id="loading-count">0</b> encontradas até agora</p>
-      <p class="small muted">A lista aparece completa quando terminar. Com muitas conversas pode levar alguns minutos.</p>
-    </div>
+      <div class="listbar">
+        <label class="check">
+          <input type="checkbox" id="people-select-all">
+          <span>Selecionar todas as <b id="people-visible-count">0</b> visíveis</span>
+        </label>
+        <span class="muted small" id="people-status"></span>
+        <button class="btn ghost small" id="people-reload-btn">Recarregar</button>
+      </div>
 
-    <ul id="thread-list" class="thread-list"></ul>
-    <p id="empty" class="muted center-text" hidden>Nenhuma conversa encontrada.</p>
+      <div id="people-loading" class="loading-panel" hidden>
+        <div class="spinner"></div>
+        <p><b>Comparando quem você segue com quem te segue…</b></p>
+        <p class="muted">Seguidores: <b id="people-count-followers">0</b><span id="people-total-followers"></span></p>
+        <p class="muted">Seguindo: <b id="people-count-following">0</b><span id="people-total-following"></span></p>
+        <p class="small muted">A lista só aparece quando as duas terminarem de carregar, para não mostrar ninguém por engano.</p>
+      </div>
+
+      <div id="people-error" class="loading-panel" hidden>
+        <p><b>O carregamento parou no meio.</b></p>
+        <p class="muted" id="people-error-text"></p>
+        <p class="small muted">A lista não é mostrada incompleta porque daria resultado errado. Espere um pouco e continue.</p>
+        <button class="btn primary" id="people-continue-btn">Continuar carregando</button>
+      </div>
+
+      <p id="people-warning" class="warning" hidden></p>
+      <ul id="people-list" class="thread-list"></ul>
+      <p id="people-empty" class="muted center-text" hidden>Ninguém por aqui.</p>
+    </div>
 
     <footer class="actionbar" id="actionbar" hidden>
-      <span><b id="selected-count">0</b> selecionada(s)</span>
-      <div>
-        <button class="btn ghost" id="clear-selection">Limpar seleção</button>
-        <button class="btn danger" id="delete-btn">Excluir selecionadas</button>
-      </div>
+      <span><b id="selected-count">0</b> selecionado(s)</span>
+      <div id="action-buttons"></div>
     </footer>
   </section>
 
   <!-- Confirmação -->
   <dialog id="confirm-dialog">
     <form method="dialog" class="dialog-body">
-      <h2>Excluir <span id="confirm-count"></span> conversa(s)?</h2>
-      <p class="muted">
-        Elas somem da <b>sua</b> caixa de entrada (como no botão “Excluir conversa” do app).
-        A outra pessoa continua vendo a conversa. Isso não pode ser desfeito.
-      </p>
+      <h2 id="confirm-title"></h2>
+      <p class="muted" id="confirm-text"></p>
+      <p class="small muted" id="confirm-time"></p>
+      <p class="warning" id="confirm-warning" hidden></p>
       <ul id="confirm-preview" class="confirm-preview"></ul>
       <div class="dialog-actions">
         <button class="btn ghost" value="cancel">Cancelar</button>
-        <button class="btn danger" value="ok" id="confirm-ok">Sim, excluir</button>
+        <button class="btn danger" value="ok" id="confirm-ok"></button>
       </div>
     </form>
   </dialog>
@@ -131,12 +176,10 @@
   <!-- Progresso -->
   <dialog id="progress-dialog">
     <div class="dialog-body">
-      <h2 id="progress-title">Excluindo…</h2>
+      <h2 id="progress-title"></h2>
       <div class="progress"><div class="progress-fill" id="progress-fill"></div></div>
       <p id="progress-text" class="muted"></p>
-      <p class="small muted" id="progress-hint">
-        Tem uma pausa de alguns segundos entre cada exclusão para o Instagram não bloquear sua conta.
-      </p>
+      <p class="small muted" id="progress-hint"></p>
       <ul id="progress-errors" class="error-list"></ul>
       <div class="dialog-actions">
         <button class="btn ghost" id="cancel-job">Parar</button>
