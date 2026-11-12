@@ -32,6 +32,19 @@ lote) e **quem você não segue de volta** (para seguir de volta ou remover o se
 “Excluir” aqui é o mesmo que o botão **Excluir conversa** do app: a conversa some da
 **sua** caixa de entrada, mas a outra pessoa continua vendo. Não dá para desfazer.
 
+### Cancelar o envio das suas mensagens
+
+Ao excluir, você pode marcar **“Cancelar o envio das minhas mensagens antes”**. Aí, para cada
+conversa, o app lê o histórico inteiro, faz o mesmo que o **Cancelar envio** do app em cada
+mensagem que **você** mandou (ela some para os dois lados) e só depois exclui a conversa.
+
+- As mensagens da outra pessoa não dá para apagar: elas continuam para ela.
+- É bem mais lento: uma mensagem por vez, uns 2 a 3 segundos cada. Uma conversa com 300
+  mensagens suas leva uns 15 minutos. A pausa extra pode ser mudada com `UNSEND_DELAY_MIN` e
+  `UNSEND_DELAY_MAX`.
+- Se o envio de alguma mensagem não puder ser cancelado, a conversa **não** é excluída, para você
+  poder tentar de novo depois.
+
 ## Como usar
 
 Você precisa do **Python entre 3.10 e 3.14**. Versões mais novas ainda não funcionam porque

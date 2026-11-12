@@ -26,6 +26,7 @@ from instagrapi.exceptions import (
     BadPassword,
     ChallengeRequired,
     ClientError,
+    ClientNotFoundError,
     FeedbackRequired,
     LoginRequired,
     PleaseWaitFewMinutes,
@@ -43,6 +44,13 @@ STATIC_DIR = BASE_DIR / "static"
 DELETE_DELAY = (
     float(os.environ.get("DELETE_DELAY_MIN", "1.5")),
     float(os.environ.get("DELETE_DELAY_MAX", "3.5")),
+)
+
+# Pausa extra entre cada mensagem com envio cancelado (além da pausa normal
+# de 1-2 s que toda chamada ao Instagram já tem).
+UNSEND_DELAY = (
+    float(os.environ.get("UNSEND_DELAY_MIN", "0.5")),
+    float(os.environ.get("UNSEND_DELAY_MAX", "1.5")),
 )
 
 # Seguir/deixar de seguir em massa é o que mais gera bloqueio no Instagram,
@@ -415,6 +423,100 @@ def api_people():
 # Ações em lote (excluir conversas, deixar de seguir, seguir, remover seguidor)
 # --------------------------------------------------------------------------- #
 
+class JobCancelled(Exception):
+    pass
+
+
+class UnsendIncomplete(Exception):
+    pass
+
+
+# Itens do histórico que não são mensagens de verdade e não dá para cancelar.
+NOT_UNSENDABLE = {"action_log", "video_call_event", "placeholder"}
+
+
+def _set_detail(job: dict, text: str | None):
+    with state.lock:
+        job["detail"] = text
+
+
+def _my_message_ids(cl: Client, thread_id: str, job: dict) -> list[str]:
+    """Percorre o histórico inteiro da conversa e junta as mensagens que você enviou."""
+    me = str(cl.user_id)
+    ids: list[str] = []
+    seen_ids: set[str] = set()
+    read = 0
+    cursor = None
+    while True:
+        if state.cancel_job.is_set():
+            raise JobCancelled()
+        params = {"visual_message_return_type": "unseen", "direction": "older", "seq_id": "40065", "limit": "20"}
+        if cursor:
+            params["cursor"] = cursor
+        with state.api_lock:
+            result = cl.private_request(f"direct_v2/threads/{thread_id}/", params=params)
+        thread = result.get("thread") or {}
+        items = thread.get("items") or []
+        for item in items:
+            read += 1
+            item_id = str(item.get("item_id") or "")
+            if (
+                item_id
+                and item_id not in seen_ids
+                and str(item.get("user_id")) == me
+                and item.get("item_type") not in NOT_UNSENDABLE
+            ):
+                seen_ids.add(item_id)
+                ids.append(item_id)
+        _set_detail(job, f"Lendo o histórico… {read} mensagens lidas, {len(ids)} enviadas por você")
+        next_cursor = thread.get("oldest_cursor")
+        if not items or thread.get("has_older") is False or not next_cursor or next_cursor == cursor:
+            return ids
+        cursor = next_cursor
+
+
+def _delete_thread(cl: Client, thread_id: str, job: dict) -> bool:
+    if job["options"].get("unsend"):
+        ids = _my_message_ids(cl, thread_id, job)
+        failed = 0
+        for n, message_id in enumerate(ids, 1):
+            if state.cancel_job.is_set():
+                raise JobCancelled()
+            try:
+                with state.api_lock:
+                    ok = cl.direct_message_unsend(thread_id, message_id)
+            except ClientNotFoundError:
+                ok = True  # já tinha sumido
+            except (*RATE_LIMIT_ERRORS, LoginRequired):
+                raise
+            except Exception:  # noqa: BLE001
+                log.exception("Erro cancelando o envio de %s em %s", message_id, thread_id)
+                ok = False
+            with state.lock:
+                if ok:
+                    job["unsent"] += 1
+                else:
+                    failed += 1
+                job["detail"] = f"Cancelando o envio das suas mensagens: {n} de {len(ids)}"
+            state.cancel_job.wait(random.uniform(*UNSEND_DELAY))
+        if failed:
+            raise UnsendIncomplete(
+                f"{failed} de {len(ids)} mensagem(ns) sua(s) não tiveram o envio cancelado. "
+                "A conversa não foi excluída; tente de novo."
+            )
+        _set_detail(job, "Excluindo a conversa…")
+    with state.api_lock:
+        return cl.direct_thread_hide(thread_id)
+
+
+def _locked(fn):
+    def run(cl, item_id, job):
+        with state.api_lock:
+            return fn(cl, item_id)
+
+    return run
+
+
 def _follow(cl: Client, user_id: str) -> bool:
     if cl.user_follow(user_id):
         return True
@@ -425,10 +527,12 @@ def _follow(cl: Client, user_id: str) -> bool:
 
 # tipo -> (função, pausa entre ações, texto do resultado)
 JOB_ACTIONS = {
-    "delete_threads": (lambda cl, i: cl.direct_thread_hide(i), DELETE_DELAY, "conversa(s) excluída(s)"),
-    "unfollow": (lambda cl, i: cl.user_unfollow(i), FOLLOW_DELAY, "pessoa(s) deixada(s) de seguir"),
-    "follow": (_follow, FOLLOW_DELAY, "pessoa(s) seguida(s)"),
-    "remove_follower": (lambda cl, i: cl.user_remove_follower(i), FOLLOW_DELAY, "seguidor(es) removido(s)"),
+    "delete_threads": (_delete_thread, DELETE_DELAY, "conversa(s) excluída(s)"),
+    "unfollow": (_locked(lambda cl, i: cl.user_unfollow(i)), FOLLOW_DELAY, "pessoa(s) deixada(s) de seguir"),
+    "follow": (_locked(_follow), FOLLOW_DELAY, "pessoa(s) seguida(s)"),
+    "remove_follower": (
+        _locked(lambda cl, i: cl.user_remove_follower(i)), FOLLOW_DELAY, "seguidor(es) removido(s)"
+    ),
 }
 
 
@@ -436,31 +540,43 @@ def _job_worker(kind: str, item_ids: list[str]):
     action, delay, done_text = JOB_ACTIONS[kind]
     cl = state.client
     job = state.job
+
+    def summary() -> str:
+        text = f"{len(job['succeeded'])} {done_text}"
+        if job["unsent"]:
+            text += f", {job['unsent']} mensagem(ns) com envio cancelado"
+        return text
+
+    def cancelled():
+        with state.lock:
+            job.update(status="cancelled", detail=None, message=f"Parado. {summary()} antes de parar.")
+
     for index, item_id in enumerate(item_ids):
         if state.cancel_job.is_set():
-            with state.lock:
-                job.update(
-                    status="cancelled",
-                    message=f"Parado. {len(job['succeeded'])} {done_text} antes de parar.",
-                )
+            cancelled()
             return
+        with state.lock:
+            job["current"] = item_id
+            job["detail"] = None
         try:
-            with state.api_lock:
-                ok = action(cl, item_id)
+            ok = action(cl, item_id, job)
             with state.lock:
                 if ok:
                     job["succeeded"].append(item_id)
                 else:
                     job["failed"].append({"id": item_id, "error": "O Instagram não confirmou a ação."})
+        except JobCancelled:
+            cancelled()
+            return
         except RATE_LIMIT_ERRORS as exc:
             with state.lock:
-                job.update(status="stopped", message=friendly_error(exc))
+                job.update(status="stopped", detail=None, message=f"{friendly_error(exc)} ({summary()} até aqui.)")
             return
         except LoginRequired as exc:
             state.client = None
             state.set_login(status="logged_out", error=friendly_error(exc))
             with state.lock:
-                job.update(status="stopped", message=friendly_error(exc))
+                job.update(status="stopped", detail=None, message=friendly_error(exc))
             return
         except Exception as exc:  # noqa: BLE001
             log.exception("Erro em %s de %s", kind, item_id)
@@ -478,11 +594,13 @@ def _job_worker(kind: str, item_ids: list[str]):
         failed = len(job["failed"])
         job.update(
             status="finished",
-            message=f"{len(job['succeeded'])} {done_text}" + (f", {failed} com erro." if failed else "."),
+            current=None,
+            detail=None,
+            message=summary() + (f", {failed} com erro." if failed else "."),
         )
 
 
-def start_job(kind: str, ids):
+def start_job(kind: str, ids, options: dict | None = None):
     if not isinstance(ids, list) or not all(isinstance(i, str) and i.isdigit() for i in ids):
         return jsonify(error="Lista inválida."), 400
     ids = list(dict.fromkeys(ids))  # remove duplicadas mantendo a ordem
@@ -502,6 +620,10 @@ def start_job(kind: str, ids):
             "succeeded": [],
             "failed": [],
             "message": None,
+            "options": options or {},
+            "current": None,
+            "detail": None,
+            "unsent": 0,
         }
     threading.Thread(target=_job_worker, args=(kind, ids), daemon=True).start()
     return jsonify(ok=True)
@@ -510,7 +632,7 @@ def start_job(kind: str, ids):
 @app.post("/api/delete")
 def api_delete():
     data = request.get_json(force=False) or {}
-    return start_job("delete_threads", data.get("thread_ids") or [])
+    return start_job("delete_threads", data.get("thread_ids") or [], {"unsend": bool(data.get("unsend"))})
 
 
 @app.post("/api/people/action")

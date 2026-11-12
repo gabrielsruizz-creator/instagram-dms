@@ -163,6 +163,16 @@
     <form method="dialog" class="dialog-body">
       <h2 id="confirm-title"></h2>
       <p class="muted" id="confirm-text"></p>
+      <div id="confirm-options" class="confirm-options" hidden>
+        <label class="check">
+          <input type="checkbox" id="opt-unsend">
+          <span><b>Cancelar o envio das minhas mensagens antes</b></span>
+        </label>
+        <p class="small muted">
+          Igual ao “Cancelar envio” do app: suas mensagens somem da conversa para os dois lados.
+          As mensagens da outra pessoa não dá para apagar, elas continuam para ela.
+        </p>
+      </div>
       <p class="small muted" id="confirm-time"></p>
       <p class="warning" id="confirm-warning" hidden></p>
       <ul id="confirm-preview" class="confirm-preview"></ul>
@@ -179,6 +189,7 @@
       <h2 id="progress-title"></h2>
       <div class="progress"><div class="progress-fill" id="progress-fill"></div></div>
       <p id="progress-text" class="muted"></p>
+      <p id="progress-detail" class="small" hidden></p>
       <p class="small muted" id="progress-hint"></p>
       <ul id="progress-errors" class="error-list"></ul>
       <div class="dialog-actions">

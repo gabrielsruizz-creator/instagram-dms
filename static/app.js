@@ -701,17 +701,51 @@ function labelFor(kind, id) {
 
 let pendingAction = null;
 
+function loadPref(name, fallback) {
+  try {
+    const v = localStorage.getItem(`pref:${name}`);
+    return v === null ? fallback : v === "1";
+  } catch (_) { return fallback; }
+}
+
+function savePref(name, on) {
+  try { localStorage.setItem(`pref:${name}`, on ? "1" : "0"); } catch (_) { /* sem storage */ }
+}
+
+const unsendChosen = () => pendingAction?.kind === "delete_threads" && $("#opt-unsend").checked;
+
+function updateConfirmTime() {
+  if (!pendingAction) return;
+  const { kind, ids } = pendingAction;
+  const action = ACTIONS[kind];
+  const avg = state.delays[kind];
+  if (unsendChosen()) {
+    $("#confirm-text").textContent = "Para cada conversa, o app lê o histórico inteiro, cancela o envio de "
+      + "cada mensagem sua e depois exclui a conversa da sua caixa de entrada. Isso não pode ser desfeito.";
+    $("#confirm-time").textContent = "Demora bem mais: uma mensagem por vez, uns 2 a 3 segundos cada "
+      + "(uma conversa com 300 mensagens suas leva uns 15 minutos). Pode deixar rodando.";
+  } else {
+    $("#confirm-text").textContent = action.text;
+    $("#confirm-time").textContent = avg
+      ? `Vai levar ${formatDuration(ids.length * avg)} (uma pausa entre cada uma para o Instagram não bloquear).`
+      : "";
+  }
+}
+
+$("#opt-unsend").addEventListener("change", (e) => {
+  savePref("unsend", e.target.checked);
+  updateConfirmTime();
+});
+
 function openConfirm(kind) {
   const action = ACTIONS[kind];
   const ids = [...currentView().selected];
   pendingAction = { kind, ids };
 
   $("#confirm-title").textContent = action.title(fmt(ids.length));
-  $("#confirm-text").textContent = action.text;
-  const avg = state.delays[kind];
-  $("#confirm-time").textContent = avg
-    ? `Vai levar ${formatDuration(ids.length * avg)} (uma pausa entre cada uma para o Instagram não bloquear).`
-    : "";
+  $("#confirm-options").hidden = kind !== "delete_threads";
+  if (kind === "delete_threads") $("#opt-unsend").checked = loadPref("unsend", true);
+  updateConfirmTime();
   const warn = $("#confirm-warning");
   warn.hidden = !(action.risky && ids.length > 100);
   warn.textContent = "O Instagram costuma bloquear temporariamente quem segue ou deixa de seguir muita gente "
@@ -738,10 +772,11 @@ function openConfirm(kind) {
 $("#confirm-dialog").addEventListener("close", async () => {
   if ($("#confirm-dialog").returnValue !== "ok" || !pendingAction) return;
   const { kind, ids } = pendingAction;
+  const unsend = unsendChosen();
   pendingAction = null;
   const action = ACTIONS[kind];
   try {
-    await api(action.endpoint, { body: { action: kind, [action.bodyKey]: ids } });
+    await api(action.endpoint, { body: { action: kind, [action.bodyKey]: ids, unsend } });
     watchJob();
   } catch (err) {
     toast(err.message);
@@ -797,13 +832,23 @@ async function watchJob() {
       const avg = state.delays[job.kind] || 0;
       const pct = job.total ? Math.round((job.done / job.total) * 100) : 0;
       $("#progress-fill").style.width = `${pct}%`;
+      const unsend = Boolean(job.options && job.options.unsend);
       const left = (job.total - job.done) * avg;
       $("#progress-text").textContent = `${fmt(job.done)} de ${fmt(job.total)}`
-        + (job.done < job.total && avg ? ` · falta ${formatDuration(left)}` : "");
-      $("#progress-hint").textContent = avg
-        ? `Tem uma pausa de uns ${Math.round(avg)} segundos entre cada uma para o Instagram não bloquear sua conta. `
+        + (job.done < job.total && avg && !unsend ? ` · falta ${formatDuration(left)}` : "")
+        + (job.unsent ? ` · ${fmt(job.unsent)} mensagem(ns) com envio cancelado` : "");
+      const detail = $("#progress-detail");
+      detail.hidden = !(job.status === "running" && job.current);
+      if (!detail.hidden) {
+        detail.textContent = `Agora: ${labelFor(job.kind, job.current)}` + (job.detail ? ` — ${job.detail}` : "");
+      }
+      $("#progress-hint").textContent = unsend
+        ? "Cancelando uma mensagem por vez para o Instagram não bloquear sua conta. Conversas longas demoram. "
           + "Pode deixar rodando; a janela do app precisa continuar aberta."
-        : "";
+        : avg
+          ? `Tem uma pausa de uns ${Math.round(avg)} segundos entre cada uma para o Instagram não bloquear sua conta. `
+            + "Pode deixar rodando; a janela do app precisa continuar aberta."
+          : "";
 
       if (job.succeeded.length > applied) {
         applySucceeded(job.kind, job.succeeded.slice(applied));
