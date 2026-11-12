@@ -775,7 +775,9 @@ def api_analytics_snapshot():
                 user["gone"] = True  # conta apagada ou desativada
             confirmed.append(user)
         unverified = [previous[i] for i in lost_ids[MAX_VERIFY:]]
-        if checked and false_alarms > checked / 2:
+        # Muitos alarmes falsos = a lista veio incompleta. Poucos (alguém que o Instagram
+        # sempre deixa de fora) já foram resolvidos acima, sem barrar a análise.
+        if false_alarms >= 5 and false_alarms > checked / 2:
             return jsonify(
                 error="O Instagram entregou uma lista de seguidores incompleta, então a comparação daria "
                 "resultado errado. Nada foi salvo. Clique em Recarregar e tente de novo daqui a pouco."

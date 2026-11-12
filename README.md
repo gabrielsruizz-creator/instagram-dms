@@ -64,6 +64,9 @@ mensagem que **você** mandou (ela some para os dois lados) e só depois exclui 
 - Se o envio de alguma mensagem não puder ser cancelado, a conversa **não** é excluída, para você
   poder tentar de novo depois.
 
+O visual tem modo **claro** e **escuro**: o botão de tema no menu lateral alterna entre
+automático (segue o sistema), claro e escuro, e o app lembra a escolha.
+
 ## Como usar
 
 Você precisa do **Python entre 3.10 e 3.14**. Versões mais novas ainda não funcionam porque

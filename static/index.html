@@ -4,7 +4,19 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Limpador de DMs</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/static/style.css">
+  <script>
+    // Aplica o tema antes de desenhar a página, para não piscar.
+    (function () {
+      var pref = "auto";
+      try { pref = localStorage.getItem("pref:theme") || "auto"; } catch (e) {}
+      var dark = pref === "dark" || (pref === "auto" && window.matchMedia("(prefers-color-scheme: dark)").matches);
+      document.documentElement.dataset.theme = dark ? "dark" : "light";
+    })();
+  </script>
 </head>
 <body>
   <!-- Carregando -->
@@ -16,6 +28,7 @@
   <!-- Login -->
   <section id="screen-login" class="screen center" hidden>
     <form id="login-form" class="card">
+      <div class="card-art" aria-hidden="true"><svg class="flower" viewBox="-100 -100 200 200" aria-hidden="true"><defs><linearGradient id="pa-login" x1="0" y1="1" x2="0" y2="0"><stop offset="0" stop-color="#f3d4ff"/><stop offset=".55" stop-color="#a98bff"/><stop offset="1" stop-color="#6d4dff"/></linearGradient><linearGradient id="pb-login" x1="0" y1="1" x2="0" y2="0"><stop offset="0" stop-color="#fff"/><stop offset="1" stop-color="#e6b8f5"/></linearGradient><radialGradient id="pc-login"><stop offset="0" stop-color="#fff"/><stop offset="1" stop-color="#fff" stop-opacity="0"/></radialGradient></defs><g class="petals" opacity=".62"><ellipse cx="0" cy="-46" rx="25" ry="50" transform="rotate(0)" fill="url(#pa-login)"/><ellipse cx="0" cy="-46" rx="25" ry="50" transform="rotate(30)" fill="url(#pa-login)"/><ellipse cx="0" cy="-46" rx="25" ry="50" transform="rotate(60)" fill="url(#pa-login)"/><ellipse cx="0" cy="-46" rx="25" ry="50" transform="rotate(90)" fill="url(#pa-login)"/><ellipse cx="0" cy="-46" rx="25" ry="50" transform="rotate(120)" fill="url(#pa-login)"/><ellipse cx="0" cy="-46" rx="25" ry="50" transform="rotate(150)" fill="url(#pa-login)"/><ellipse cx="0" cy="-46" rx="25" ry="50" transform="rotate(180)" fill="url(#pa-login)"/><ellipse cx="0" cy="-46" rx="25" ry="50" transform="rotate(210)" fill="url(#pa-login)"/><ellipse cx="0" cy="-46" rx="25" ry="50" transform="rotate(240)" fill="url(#pa-login)"/><ellipse cx="0" cy="-46" rx="25" ry="50" transform="rotate(270)" fill="url(#pa-login)"/><ellipse cx="0" cy="-46" rx="25" ry="50" transform="rotate(300)" fill="url(#pa-login)"/><ellipse cx="0" cy="-46" rx="25" ry="50" transform="rotate(330)" fill="url(#pa-login)"/></g><g opacity=".7"><ellipse cx="0" cy="-28" rx="16" ry="32" transform="rotate(15)" fill="url(#pb-login)"/><ellipse cx="0" cy="-28" rx="16" ry="32" transform="rotate(45)" fill="url(#pb-login)"/><ellipse cx="0" cy="-28" rx="16" ry="32" transform="rotate(75)" fill="url(#pb-login)"/><ellipse cx="0" cy="-28" rx="16" ry="32" transform="rotate(105)" fill="url(#pb-login)"/><ellipse cx="0" cy="-28" rx="16" ry="32" transform="rotate(135)" fill="url(#pb-login)"/><ellipse cx="0" cy="-28" rx="16" ry="32" transform="rotate(165)" fill="url(#pb-login)"/><ellipse cx="0" cy="-28" rx="16" ry="32" transform="rotate(195)" fill="url(#pb-login)"/><ellipse cx="0" cy="-28" rx="16" ry="32" transform="rotate(225)" fill="url(#pb-login)"/><ellipse cx="0" cy="-28" rx="16" ry="32" transform="rotate(255)" fill="url(#pb-login)"/><ellipse cx="0" cy="-28" rx="16" ry="32" transform="rotate(285)" fill="url(#pb-login)"/><ellipse cx="0" cy="-28" rx="16" ry="32" transform="rotate(315)" fill="url(#pb-login)"/><ellipse cx="0" cy="-28" rx="16" ry="32" transform="rotate(345)" fill="url(#pb-login)"/></g><circle r="16" fill="url(#pc-login)"/></svg></div>
       <h1>Limpador de DMs</h1>
       <p class="muted">Entre com sua conta do Instagram para ver e excluir conversas em massa.</p>
       <label>Usuário
@@ -48,20 +61,28 @@
 
   <!-- App -->
   <section id="screen-app" class="screen" hidden>
-    <header class="topbar">
-      <div class="brand">Limpador de DMs</div>
-      <div class="me">
-        <span id="me-username"></span>
-        <button class="btn ghost" id="logout-btn">Sair</button>
+    <aside class="sidebar">
+      <div class="logo" aria-hidden="true">DM</div>
+      <nav class="side-nav" role="tablist" aria-label="Seções">
+        <button class="section-tab active" data-section="dms" data-label="Mensagens" aria-label="Mensagens"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 11.5a8.4 8.4 0 0 1-9 8.4 9 9 0 0 1-3.9-.9L3 20l1.1-4.2A8.2 8.2 0 0 1 3 11.5 8.6 8.6 0 0 1 12 3a8.6 8.6 0 0 1 9 8.5Z"/></svg></button>
+        <button class="section-tab" data-section="nfb" data-label="Não me seguem de volta" aria-label="Não me seguem de volta"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 11h-6"/></svg><span class="side-badge" id="count-nfb"></span></button>
+        <button class="section-tab" data-section="fnb" data-label="Não sigo de volta" aria-label="Não sigo de volta"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M19 8v6M22 11h-6"/></svg><span class="side-badge" id="count-fnb"></span></button>
+        <button class="section-tab" data-section="analysis" data-label="Análise" aria-label="Análise"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 3v18h18"/><path d="M7 15v2M11 11v6M15 7v10M19 12v5"/></svg></button>
+      </nav>
+      <div class="side-bottom">
+        <button class="side-btn" id="theme-btn" data-label="Tema" aria-label="Trocar tema"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 3a9 9 0 0 1 0 18Z" fill="currentColor"/></svg></button>
+        <button class="side-btn" id="logout-btn" data-label="Sair" aria-label="Sair"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="m16 17 5-5-5-5M21 12H9"/></svg></button>
       </div>
-    </header>
+    </aside>
 
-    <nav class="sections" role="tablist">
-      <button class="section-tab active" data-section="dms">Mensagens</button>
-      <button class="section-tab" data-section="nfb">Não me seguem de volta <span class="count" id="count-nfb"></span></button>
-      <button class="section-tab" data-section="fnb">Não sigo de volta <span class="count" id="count-fnb"></span></button>
-      <button class="section-tab" data-section="analysis">Análise</button>
-    </nav>
+    <main class="main">
+      <header class="page-head">
+        <div>
+          <h1 id="page-title">Mensagens</h1>
+          <p class="muted" id="page-sub">Todas as suas conversas. Selecione e exclua de uma vez.</p>
+        </div>
+        <div class="me-chip"><span class="me-avatar" id="me-avatar">@</span><span id="me-username"></span></div>
+      </header>
 
     <!-- Mensagens -->
     <div id="section-dms">
@@ -180,7 +201,13 @@
 
       <!-- Resumo -->
       <div id="an-summary" hidden>
-        <p id="an-news" class="news" hidden></p>
+        <div class="hero">
+          <div class="hero-text">
+            <h2 id="hero-title">Sua conta em resumo</h2>
+            <p id="an-news"></p>
+          </div>
+          <div class="hero-art" aria-hidden="true"><svg class="flower" viewBox="-100 -100 200 200" aria-hidden="true"><defs><linearGradient id="pa-hero" x1="0" y1="1" x2="0" y2="0"><stop offset="0" stop-color="#f3d4ff"/><stop offset=".55" stop-color="#a98bff"/><stop offset="1" stop-color="#6d4dff"/></linearGradient><linearGradient id="pb-hero" x1="0" y1="1" x2="0" y2="0"><stop offset="0" stop-color="#fff"/><stop offset="1" stop-color="#e6b8f5"/></linearGradient><radialGradient id="pc-hero"><stop offset="0" stop-color="#fff"/><stop offset="1" stop-color="#fff" stop-opacity="0"/></radialGradient></defs><g class="petals" opacity=".62"><ellipse cx="0" cy="-46" rx="25" ry="50" transform="rotate(0)" fill="url(#pa-hero)"/><ellipse cx="0" cy="-46" rx="25" ry="50" transform="rotate(30)" fill="url(#pa-hero)"/><ellipse cx="0" cy="-46" rx="25" ry="50" transform="rotate(60)" fill="url(#pa-hero)"/><ellipse cx="0" cy="-46" rx="25" ry="50" transform="rotate(90)" fill="url(#pa-hero)"/><ellipse cx="0" cy="-46" rx="25" ry="50" transform="rotate(120)" fill="url(#pa-hero)"/><ellipse cx="0" cy="-46" rx="25" ry="50" transform="rotate(150)" fill="url(#pa-hero)"/><ellipse cx="0" cy="-46" rx="25" ry="50" transform="rotate(180)" fill="url(#pa-hero)"/><ellipse cx="0" cy="-46" rx="25" ry="50" transform="rotate(210)" fill="url(#pa-hero)"/><ellipse cx="0" cy="-46" rx="25" ry="50" transform="rotate(240)" fill="url(#pa-hero)"/><ellipse cx="0" cy="-46" rx="25" ry="50" transform="rotate(270)" fill="url(#pa-hero)"/><ellipse cx="0" cy="-46" rx="25" ry="50" transform="rotate(300)" fill="url(#pa-hero)"/><ellipse cx="0" cy="-46" rx="25" ry="50" transform="rotate(330)" fill="url(#pa-hero)"/></g><g opacity=".7"><ellipse cx="0" cy="-28" rx="16" ry="32" transform="rotate(15)" fill="url(#pb-hero)"/><ellipse cx="0" cy="-28" rx="16" ry="32" transform="rotate(45)" fill="url(#pb-hero)"/><ellipse cx="0" cy="-28" rx="16" ry="32" transform="rotate(75)" fill="url(#pb-hero)"/><ellipse cx="0" cy="-28" rx="16" ry="32" transform="rotate(105)" fill="url(#pb-hero)"/><ellipse cx="0" cy="-28" rx="16" ry="32" transform="rotate(135)" fill="url(#pb-hero)"/><ellipse cx="0" cy="-28" rx="16" ry="32" transform="rotate(165)" fill="url(#pb-hero)"/><ellipse cx="0" cy="-28" rx="16" ry="32" transform="rotate(195)" fill="url(#pb-hero)"/><ellipse cx="0" cy="-28" rx="16" ry="32" transform="rotate(225)" fill="url(#pb-hero)"/><ellipse cx="0" cy="-28" rx="16" ry="32" transform="rotate(255)" fill="url(#pb-hero)"/><ellipse cx="0" cy="-28" rx="16" ry="32" transform="rotate(285)" fill="url(#pb-hero)"/><ellipse cx="0" cy="-28" rx="16" ry="32" transform="rotate(315)" fill="url(#pb-hero)"/><ellipse cx="0" cy="-28" rx="16" ry="32" transform="rotate(345)" fill="url(#pb-hero)"/></g><circle r="16" fill="url(#pc-hero)"/></svg></div>
+        </div>
         <div class="tiles" id="an-tiles"></div>
         <div class="chart-card">
           <h3>Seguidores ao longo do tempo</h3>
@@ -225,6 +252,8 @@
       <ul id="analysis-list" class="thread-list"></ul>
       <p id="an-empty" class="muted center-text" hidden></p>
     </div>
+
+    </main>
 
     <footer class="actionbar" id="actionbar" hidden>
       <span><b id="selected-count">0</b> selecionado(s)</span>

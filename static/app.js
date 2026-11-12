@@ -191,6 +191,8 @@ async function waitForLogin() {
 function routeLogin(login, job) {
   if (login.status === "logged_in") {
     $("#me-username").textContent = `@${login.username}`;
+    $("#me-avatar").textContent = (login.username || "@").charAt(0).toUpperCase();
+    $("#hero-title").textContent = `Olá, @${login.username}`;
     show("app");
     if (!state.threads.inbox.length && !state.loading) loadAll();
     if (state.section !== "dms" && !peopleReady() && !state.people.loading) loadPeople();
@@ -262,9 +264,19 @@ $("#logout-btn").addEventListener("click", async () => {
 
 // ---------------------------------------------------------- Seções ---
 
+const PAGE_TITLES = {
+  dms: ["Mensagens", "Todas as suas conversas. Selecione e exclua de uma vez."],
+  nfb: ["Não me seguem de volta", "Quem você segue, mas não te segue."],
+  fnb: ["Não sigo de volta", "Quem te segue, mas você não segue."],
+  analysis: ["Análise", "Seguidores, engajamento e quem interage com você."],
+};
+
 for (const tab of $$(".section-tab")) {
   tab.addEventListener("click", () => {
     state.section = tab.dataset.section;
+    const [title, sub] = PAGE_TITLES[state.section];
+    $("#page-title").textContent = title;
+    $("#page-sub").textContent = sub;
     for (const t of $$(".section-tab")) t.classList.toggle("active", t === tab);
     $("#section-dms").hidden = state.section !== "dms";
     $("#section-people").hidden = !["nfb", "fnb"].includes(state.section);
@@ -1145,7 +1157,6 @@ function renderSummary() {
   if (c && c.first) {
     news.textContent = "Primeira análise salva. Da próxima vez que você abrir esta aba, o app mostra quem deixou "
       + "de te seguir e quem começou a seguir nesse meio tempo.";
-    news.hidden = false;
   } else if (c) {
     const prev = history.length > 1 ? history[history.length - 2].at : null;
     const since = prev ? ` (${dayTimeFmt.format(new Date(prev))})` : "";
@@ -1153,9 +1164,8 @@ function renderSummary() {
       ? `Desde a última análise${since}: ${fmt(c.gained.length)} começaram a te seguir e `
         + `${fmt(c.lost.length)} deixaram de seguir.`
       : `Nada mudou nos seus seguidores desde a última análise${since}.`;
-    news.hidden = false;
   } else {
-    news.hidden = true;
+    news.textContent = "Acompanhe quem entra, quem sai e quem mais interage com você.";
   }
 
   const first = history[0];
@@ -1449,6 +1459,35 @@ $("#an-stories-btn").addEventListener("click", async () => {
     render();
   }
 });
+
+// --------------------------------------------------------------- Tema ---
+
+const THEME_LABELS = { auto: "Tema: automático", light: "Tema: claro", dark: "Tema: escuro" };
+const darkQuery = window.matchMedia("(prefers-color-scheme: dark)");
+
+function themePref() {
+  try { return localStorage.getItem("pref:theme") || "auto"; } catch (_) { return "auto"; }
+}
+
+function applyTheme() {
+  const pref = themePref();
+  const dark = pref === "dark" || (pref === "auto" && darkQuery.matches);
+  document.documentElement.dataset.theme = dark ? "dark" : "light";
+  const btn = $("#theme-btn");
+  btn.dataset.label = THEME_LABELS[pref];
+  btn.setAttribute("aria-label", THEME_LABELS[pref]);
+  // Os gráficos usam as cores do tema, então redesenha.
+  if (state.section === "analysis") render();
+}
+
+$("#theme-btn").addEventListener("click", () => {
+  const next = { auto: "light", light: "dark", dark: "auto" }[themePref()];
+  try { localStorage.setItem("pref:theme", next); } catch (_) { /* sem storage */ }
+  applyTheme();
+  toast(THEME_LABELS[next], 1500);
+});
+darkQuery.addEventListener("change", () => { if (themePref() === "auto") applyTheme(); });
+applyTheme();
 
 // ------------------------------------------------------------- Início ---
 
