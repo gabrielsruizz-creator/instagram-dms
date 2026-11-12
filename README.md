@@ -29,6 +29,25 @@ lote) e **quem você não segue de volta** (para seguir de volta ou remover o se
   mostrar ninguém por engano. Se o Instagram entregar bem menos seguidores do que o total do
   seu perfil, o app avisa para você conferir antes.
 
+### Aba Análise
+
+- **Resumo:** seguidores, seguindo, quantos deixaram de seguir, engajamento médio, o que mudou
+  desde a última vez e gráficos de seguidores ao longo do tempo e de curtidas por publicação.
+- **Deixaram de seguir:** compara com a última vez que você abriu a aba e confere cada caso com o
+  Instagram antes de mostrar, para não acusar ninguém por engano. Funciona a partir da segunda vez
+  que você abre a Análise.
+- **Fantasmas:** seguidores que não curtiram nem comentaram nenhuma das suas últimas 6, 12 ou 24
+  publicações. Dá para remover em lote.
+- **Top fãs:** quem mais curte e comenta.
+- **Viram seus stories:** quem viu os stories que estão no ar agora.
+
+O histórico fica salvo só no seu computador, na pasta `dados/` (que não vai para o GitHub). Ele
+cresce cada vez que você abre a aba, então abra de vez em quando para o gráfico e a lista de quem
+deixou de seguir ficarem completos.
+
+Não existe “quem visitou seu perfil”: o Instagram não informa isso para ninguém, e os apps que
+prometem inventam os números.
+
 “Excluir” aqui é o mesmo que o botão **Excluir conversa** do app: a conversa some da
 **sua** caixa de entrada, mas a outra pessoa continua vendo. Não dá para desfazer.
 

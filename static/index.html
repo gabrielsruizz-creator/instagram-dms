@@ -60,6 +60,7 @@
       <button class="section-tab active" data-section="dms">Mensagens</button>
       <button class="section-tab" data-section="nfb">Não me seguem de volta <span class="count" id="count-nfb"></span></button>
       <button class="section-tab" data-section="fnb">Não sigo de volta <span class="count" id="count-fnb"></span></button>
+      <button class="section-tab" data-section="analysis">Análise</button>
     </nav>
 
     <!-- Mensagens -->
@@ -150,6 +151,79 @@
       <p id="people-warning" class="warning" hidden></p>
       <ul id="people-list" class="thread-list"></ul>
       <p id="people-empty" class="muted center-text" hidden>Ninguém por aqui.</p>
+    </div>
+
+    <!-- Análise -->
+    <div id="section-analysis" hidden>
+      <div class="toolbar">
+        <div class="tabs" role="tablist">
+          <button class="tab an-tab active" data-an="summary">Resumo</button>
+          <button class="tab an-tab" data-an="unfollowers">Deixaram de seguir <span class="count" id="count-an-unfollowers"></span></button>
+          <button class="tab an-tab" data-an="ghosts">Fantasmas <span class="count" id="count-an-ghosts"></span></button>
+          <button class="tab an-tab" data-an="fans">Top fãs</button>
+          <button class="tab an-tab" data-an="stories">Viram seus stories</button>
+        </div>
+        <p class="muted small" id="an-help"></p>
+      </div>
+
+      <div id="an-loading" class="loading-panel" hidden>
+        <div class="spinner"></div>
+        <p><b id="an-loading-title">Carregando seus seguidores…</b></p>
+        <p class="muted" id="an-loading-text"></p>
+      </div>
+
+      <div id="an-error" class="loading-panel" hidden>
+        <p><b>Não deu para terminar a análise.</b></p>
+        <p class="muted" id="an-error-text"></p>
+        <button class="btn primary" id="an-retry-btn">Tentar de novo</button>
+      </div>
+
+      <!-- Resumo -->
+      <div id="an-summary" hidden>
+        <p id="an-news" class="news" hidden></p>
+        <div class="tiles" id="an-tiles"></div>
+        <div class="chart-card">
+          <h3>Seguidores ao longo do tempo</h3>
+          <p class="muted small" id="chart-followers-sub"></p>
+          <div class="chart" id="chart-followers"></div>
+        </div>
+        <div class="chart-card">
+          <h3>Curtidas por publicação</h3>
+          <p class="muted small" id="chart-posts-sub"></p>
+          <div class="chart" id="chart-posts"></div>
+        </div>
+        <p class="small muted center-text">
+          Quem visitou seu perfil o Instagram não informa para ninguém. Apps que prometem isso inventam os números.
+          O mais perto disso é a aba “Viram seus stories”.
+        </p>
+      </div>
+
+      <!-- Controles da análise de publicações (Fantasmas / Top fãs) -->
+      <div id="an-engagement-bar" class="listbar" hidden>
+        <span class="muted small" id="an-engagement-info"></span>
+        <select id="an-posts" title="Quantas publicações analisar">
+          <option value="6">Últimas 6</option>
+          <option value="12" selected>Últimas 12</option>
+          <option value="24">Últimas 24</option>
+        </select>
+        <button class="btn primary small" id="an-engagement-btn">Analisar publicações</button>
+      </div>
+
+      <div id="an-stories-bar" class="listbar" hidden>
+        <span class="muted small" id="an-stories-info"></span>
+        <button class="btn primary small" id="an-stories-btn">Ver quem viu</button>
+      </div>
+
+      <div id="an-listbar" class="listbar" hidden>
+        <label class="check" id="an-select-wrap">
+          <input type="checkbox" id="analysis-select-all">
+          <span>Selecionar todas as <b id="an-visible-count">0</b> visíveis</span>
+        </label>
+        <input type="search" id="an-search" placeholder="Buscar…">
+      </div>
+
+      <ul id="analysis-list" class="thread-list"></ul>
+      <p id="an-empty" class="muted center-text" hidden></p>
     </div>
 
     <footer class="actionbar" id="actionbar" hidden>

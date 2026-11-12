@@ -11,6 +11,7 @@ O app abre em http://127.0.0.1:8765
 """
 
 import functools
+import json
 import logging
 import os
 import queue
@@ -18,6 +19,7 @@ import random
 import threading
 import time
 import webbrowser
+from datetime import datetime, timezone
 from pathlib import Path
 
 from flask import Flask, abort, jsonify, request, send_from_directory
@@ -83,6 +85,7 @@ class State:
         self.pending_credentials: tuple[str, str] | None = None  # só em memória, para o 2FA
         self.challenge_codes: queue.Queue[str] = queue.Queue()
         self.job: dict | None = None
+        self.analysis: dict | None = None  # análise de publicações em andamento
         self.cancel_job = threading.Event()
 
     def set_login(self, **kwargs):
@@ -560,6 +563,8 @@ def _job_worker(kind: str, item_ids: list[str]):
             job["detail"] = None
         try:
             ok = action(cl, item_id, job)
+            if ok and kind == "remove_follower":
+                note_removed_by_me(str(cl.user_id), item_id)
             with state.lock:
                 if ok:
                     job["succeeded"].append(item_id)
@@ -651,6 +656,252 @@ def api_delete_cancel():
 
 
 # --------------------------------------------------------------------------- #
+# Análise do perfil (histórico salvo só neste computador)
+# --------------------------------------------------------------------------- #
+
+DATA_DIR = BASE_DIR / "dados"
+MAX_HISTORY = 500
+MAX_EVENTS = 300
+# Quantos "deixou de seguir" conferimos um a um com o Instagram a cada análise.
+MAX_VERIFY = 40
+USER_FIELDS = ("id", "username", "full_name", "pic", "is_private", "is_verified")
+
+
+def _now() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def _analytics_path(user_id: str) -> Path:
+    return DATA_DIR / f"analise-{user_id}.json"
+
+
+def load_analytics(user_id: str) -> dict:
+    path = _analytics_path(user_id)
+    data = {}
+    if path.exists():
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            log.exception("Arquivo de análise ilegível, começando de novo")
+    data.setdefault("last_followers", {})
+    data.setdefault("history", [])
+    data.setdefault("events", [])
+    data.setdefault("engagement", None)
+    data.setdefault("stories", None)
+    data.setdefault("removed_by_me", [])
+    return data
+
+
+def save_analytics(user_id: str, data: dict):
+    DATA_DIR.mkdir(exist_ok=True)
+    path = _analytics_path(user_id)
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+    tmp.replace(path)
+
+
+def note_removed_by_me(me: str, user_id: str):
+    """Quem você removeu não deve aparecer depois como "deixou de seguir"."""
+    with state.lock:
+        data = load_analytics(me)
+        if user_id not in data["removed_by_me"]:
+            data["removed_by_me"].append(user_id)
+            save_analytics(me, data)
+
+
+def public_analytics(data: dict) -> dict:
+    """O que a tela precisa (sem a lista completa de seguidores)."""
+    return {
+        "history": data["history"],
+        "events": data["events"],
+        "engagement": data["engagement"],
+        "stories": data["stories"],
+        "has_baseline": bool(data["last_followers"]),
+    }
+
+
+def _clean_user(raw: dict) -> dict | None:
+    if not isinstance(raw, dict) or not str(raw.get("id", "")).isdigit():
+        return None
+    return {k: raw.get(k) for k in USER_FIELDS}
+
+
+@app.get("/api/analytics")
+@instagram_errors
+def api_analytics():
+    cl = require_client()
+    with state.lock:
+        data = load_analytics(str(cl.user_id))
+    return jsonify(public_analytics(data))
+
+
+@app.post("/api/analytics/snapshot")
+@instagram_errors
+def api_analytics_snapshot():
+    """Recebe a lista completa de seguidores já carregada na tela e compara com a anterior."""
+    cl = require_client()
+    me = str(cl.user_id)
+    body = request.get_json(force=False) or {}
+    followers = {}
+    for raw in body.get("followers") or []:
+        u = _clean_user(raw)
+        if u:
+            followers[u["id"]] = u
+    following_count = int(body.get("following_count") or 0)
+
+    with state.lock:
+        data = load_analytics(me)
+    previous = data["last_followers"]
+    change = {"at": _now(), "lost": [], "gained": [], "first": not previous}
+
+    if previous:
+        removed = set(data["removed_by_me"])
+        lost_ids = [i for i in previous if i not in followers and i not in removed]
+        gained = [followers[i] for i in followers if i not in previous]
+        # Confere com o Instagram se a pessoa deixou mesmo de seguir: às vezes a lista
+        # vem incompleta e alguém "some" sem ter deixado de seguir.
+        confirmed, false_alarms, checked = [], 0, 0
+        for uid in lost_ids[:MAX_VERIFY]:
+            checked += 1
+            user = dict(previous[uid])
+            try:
+                with state.api_lock:
+                    rel = cl.user_friendship_v1(uid)
+                if rel.followed_by:
+                    false_alarms += 1
+                    followers[uid] = previous[uid]  # continua seguindo
+                    continue
+            except ClientNotFoundError:
+                user["gone"] = True  # conta apagada ou desativada
+            confirmed.append(user)
+        unverified = [previous[i] for i in lost_ids[MAX_VERIFY:]]
+        if checked and false_alarms > checked / 2:
+            return jsonify(
+                error="O Instagram entregou uma lista de seguidores incompleta, então a comparação daria "
+                "resultado errado. Nada foi salvo. Clique em Recarregar e tente de novo daqui a pouco."
+            ), 409
+        change["lost"] = confirmed + unverified
+        change["gained"] = gained
+
+    history = data["history"]
+    point = {"at": change["at"], "followers": len(followers), "following": following_count}
+    # Um ponto por hora no máximo, para o gráfico não virar um amontoado.
+    if history and (datetime.fromisoformat(change["at"]) - datetime.fromisoformat(history[-1]["at"])).total_seconds() < 3600:
+        history[-1] = point
+    else:
+        history.append(point)
+    data["history"] = history[-MAX_HISTORY:]
+    if change["lost"] or change["gained"]:
+        data["events"].append({"at": change["at"], "lost": change["lost"], "gained": change["gained"]})
+        data["events"] = data["events"][-MAX_EVENTS:]
+    data["last_followers"] = followers
+    data["removed_by_me"] = [i for i in data["removed_by_me"] if i in followers]
+
+    with state.lock:
+        save_analytics(me, data)
+    return jsonify(analytics=public_analytics(data), change=change)
+
+
+def _engagement_worker(cl: Client, posts_wanted: int):
+    me = str(cl.user_id)
+    task = state.analysis
+    try:
+        with state.api_lock:
+            medias = cl.user_medias_v1(me, amount=posts_wanted)
+        with state.lock:
+            task.update(total=len(medias), done=0)
+        posts, people = [], {}
+
+        def bump(u, field):
+            uid = str(u.pk)
+            if uid == me:
+                return
+            entry = people.setdefault(uid, {**serialize_user(u), "likes": 0, "comments": 0})
+            entry[field] += 1
+
+        for m in medias:
+            with state.api_lock:
+                likers = cl.media_likers(m.pk)
+            with state.api_lock:
+                comments = cl.media_comments(m.pk, amount=100) if m.comment_count else []
+            for u in likers:
+                bump(u, "likes")
+            commenters = set()
+            for c in comments:
+                if c.user and c.user.pk not in commenters:
+                    commenters.add(c.user.pk)
+                    bump(c.user, "comments")
+            posts.append({
+                "code": m.code,
+                "taken_at": m.taken_at.isoformat() if m.taken_at else None,
+                "likes": m.like_count or len(likers),
+                "comments": m.comment_count or 0,
+                "likers_listed": len(likers),
+                "thumb": str(m.thumbnail_url) if m.thumbnail_url else None,
+                "caption": (m.caption_text or "")[:80],
+            })
+            with state.lock:
+                task["done"] += 1
+
+        result = {"at": _now(), "posts": posts, "people": list(people.values())}
+        with state.lock:
+            data = load_analytics(me)
+            data["engagement"] = result
+            save_analytics(me, data)
+            task.update(status="done", result=result)
+    except Exception as exc:  # noqa: BLE001
+        log.exception("Erro na análise de engajamento")
+        with state.lock:
+            task.update(status="error", message=friendly_error(exc))
+
+
+@app.post("/api/analytics/engagement")
+def api_engagement_start():
+    cl = state.client
+    if cl is None:
+        return jsonify(error="Faça login primeiro."), 401
+    body = request.get_json(force=False) or {}
+    posts = max(1, min(int(body.get("posts") or 12), 50))
+    with state.lock:
+        if state.analysis and state.analysis["status"] == "running":
+            return jsonify(error="A análise já está rodando."), 409
+        state.analysis = {"status": "running", "done": 0, "total": 0, "message": None, "result": None}
+    threading.Thread(target=_engagement_worker, args=(cl, posts), daemon=True).start()
+    return jsonify(ok=True)
+
+
+@app.get("/api/analytics/engagement")
+def api_engagement_status():
+    with state.lock:
+        task = dict(state.analysis) if state.analysis else {"status": "idle"}
+    return jsonify(task)
+
+
+@app.get("/api/analytics/stories")
+@instagram_errors
+def api_story_viewers():
+    cl = require_client()
+    me = str(cl.user_id)
+    with state.api_lock:
+        stories = cl.user_stories(me)
+    viewers = {}
+    for story in stories:
+        with state.api_lock:
+            seen = cl.story_viewers(story.pk)
+        for v in seen:
+            entry = viewers.setdefault(str(v.pk), {**serialize_user(v), "views": 0, "liked": 0})
+            entry["views"] += 1
+            if v.has_liked:
+                entry["liked"] += 1
+    result = {"at": _now(), "stories": len(stories), "viewers": list(viewers.values())}
+    with state.lock:
+        data = load_analytics(me)
+        data["stories"] = result
+        save_analytics(me, data)
+    return jsonify(result)
+
+
+# --------------------------------------------------------------------------- #
 # Proteções simples: só aceita requisições do próprio navegador local
 # --------------------------------------------------------------------------- #
 
@@ -664,6 +915,11 @@ def only_local():
     origin = request.headers.get("Origin")
     if origin and origin.split("://", 1)[-1] not in ALLOWED_HOSTS:
         abort(403)
+
+
+@app.get("/favicon.ico")
+def favicon():
+    return "", 204
 
 
 @app.get("/")

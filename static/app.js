@@ -16,7 +16,14 @@ const state = {
   removedByJob: new Set(),
   // Seguidores / seguindo
   people: emptyPeople(),
+  // Análise do perfil
+  analytics: emptyAnalytics(),
 };
+
+function emptyAnalytics() {
+  return { tab: "summary", data: null, change: null, snapshotting: false, error: null, engagementRunning: false,
+    engagementProgress: null, storiesLoading: false };
+}
 
 function emptyPeople() {
   return {
@@ -27,6 +34,7 @@ function emptyPeople() {
     totals: { followers: null, following: null },
     loading: false,
     loadError: null,
+    snapshotted: false,
   };
 }
 
@@ -36,7 +44,15 @@ const views = {
   nfb: { list: "#people-list", selectAll: "#people-select-all", selected: new Set(), visible: [], lastClickedIndex: null },
   fnb: { list: "#people-list", selectAll: "#people-select-all", selected: new Set(), visible: [], lastClickedIndex: null },
 };
-const currentView = () => views[state.section];
+// Sub-abas da Análise
+for (const key of ["summary", "unfollowers", "ghosts", "fans", "stories"]) {
+  views[key] = {
+    list: "#analysis-list", selectAll: "#analysis-select-all", selected: new Set(), visible: [], lastClickedIndex: null,
+    static: !["unfollowers", "ghosts"].includes(key),
+  };
+}
+const viewKey = () => (state.section === "analysis" ? state.analytics.tab : state.section);
+const currentView = () => views[viewKey()];
 
 // O que cada botão da barra de baixo faz.
 const ACTIONS = {
@@ -94,6 +110,11 @@ const SECTION_ACTIONS = {
   dms: ["delete_threads"],
   nfb: ["unfollow"],
   fnb: ["remove_follower", "follow"],
+  summary: [],
+  unfollowers: ["unfollow"],
+  ghosts: ["remove_follower"],
+  fans: [],
+  stories: [],
 };
 
 // ------------------------------------------------------------------ API ---
@@ -230,6 +251,7 @@ $("#logout-btn").addEventListener("click", async () => {
     await api("/api/logout", { body: {} });
     resetThreads();
     state.people = emptyPeople();
+    state.analytics = emptyAnalytics();
     for (const v of Object.values(views)) v.selected.clear();
     render();
     show("login");
@@ -245,14 +267,18 @@ for (const tab of $$(".section-tab")) {
     state.section = tab.dataset.section;
     for (const t of $$(".section-tab")) t.classList.toggle("active", t === tab);
     $("#section-dms").hidden = state.section !== "dms";
-    $("#section-people").hidden = state.section === "dms";
+    $("#section-people").hidden = !["nfb", "fnb"].includes(state.section);
+    $("#section-analysis").hidden = state.section !== "analysis";
+    if (state.section === "analysis") enterAnalysis();
     if (state.section !== "dms" && !peopleReady() && !state.people.loading && !state.people.loadError) loadPeople();
     render();
   });
 }
 
 function render() {
-  if (state.section === "dms") renderDms(); else renderPeople();
+  if (state.section === "dms") renderDms();
+  else if (state.section === "analysis") renderAnalysis();
+  else renderPeople();
   renderActionBar();
 }
 
@@ -501,6 +527,7 @@ async function loadPeople() {
     p.loading = false;
     render();
     updatePeopleStatus();
+    if (peopleReady() && !p.snapshotted) takeSnapshot();
   }
 }
 
@@ -643,7 +670,7 @@ function renderActionBar() {
   clear.textContent = "Limpar seleção";
   clear.addEventListener("click", () => { view.selected.clear(); render(); });
   buttons.push(clear);
-  for (const kind of SECTION_ACTIONS[state.section]) {
+  for (const kind of SECTION_ACTIONS[viewKey()]) {
     const b = document.createElement("button");
     b.className = `btn ${ACTIONS[kind].buttonClass}`;
     b.textContent = ACTIONS[kind].button;
@@ -659,6 +686,7 @@ function onListClick(e) {
   const li = e.target.closest("li.thread");
   if (!li) return;
   const view = currentView();
+  if (view.static) return;
   const index = Number(li.dataset.index);
   const item = view.visible[index];
   const on = !view.selected.has(item.id);
@@ -674,8 +702,9 @@ function onListClick(e) {
 
 $("#thread-list").addEventListener("click", onListClick);
 $("#people-list").addEventListener("click", onListClick);
+$("#analysis-list").addEventListener("click", onListClick);
 
-for (const sel of ["#select-all", "#people-select-all"]) {
+for (const sel of ["#select-all", "#people-select-all", "#analysis-select-all"]) {
   $(sel).addEventListener("change", (e) => {
     const view = currentView();
     for (let i = 0; i < view.visible.length; i++) setRowSelected(view, i, e.target.checked);
@@ -690,7 +719,8 @@ function threadById(id) {
 }
 
 function personById(id) {
-  return state.people.following.find((u) => u.id === id) || state.people.followers.find((u) => u.id === id);
+  return state.people.following.find((u) => u.id === id) || state.people.followers.find((u) => u.id === id)
+    || analysisUnfollowers().find((u) => u.id === id);
 }
 
 function labelFor(kind, id) {
@@ -803,7 +833,7 @@ function applySucceeded(kind, ids) {
       const known = new Set(p.following.map((u) => u.id));
       for (const u of p.followers) if (gone.has(u.id) && !known.has(u.id)) p.following.push(u);
     }
-    for (const id of ids) { views.nfb.selected.delete(id); views.fnb.selected.delete(id); }
+    for (const id of ids) for (const k of ["nfb", "fnb", "unfollowers", "ghosts"]) views[k].selected.delete(id);
     updatePeopleStatus();
   }
   render();
@@ -889,6 +919,536 @@ $("#cancel-job").addEventListener("click", async () => {
 $("#close-progress").addEventListener("click", () => $("#progress-dialog").close());
 // Não deixa fechar com Esc enquanto está rodando.
 $("#progress-dialog").addEventListener("cancel", (e) => { if (watching) e.preventDefault(); });
+
+// ------------------------------------------------------------- Análise ---
+
+const AN_HELP = {
+  summary: "Resumo da sua conta. O histórico fica salvo só neste computador e cresce a cada vez que você abre esta aba.",
+  unfollowers: "Quem te seguia e deixou de seguir, desde a primeira vez que você abriu a Análise.",
+  ghosts: "Seguidores que não curtiram nem comentaram nenhuma das suas últimas publicações.",
+  fans: "Quem mais curte e comenta suas últimas publicações.",
+  stories: "Quem viu os stories que estão no ar agora (o Instagram só guarda isso enquanto o story está no ar).",
+};
+
+const dayFmt = new Intl.DateTimeFormat("pt-BR", { day: "2-digit", month: "2-digit", year: "numeric" });
+const dayTimeFmt = new Intl.DateTimeFormat("pt-BR", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
+const shortDayFmt = new Intl.DateTimeFormat("pt-BR", { day: "2-digit", month: "short" });
+
+async function enterAnalysis() {
+  const a = state.analytics;
+  if (!a.data) {
+    try { a.data = await api("/api/analytics"); } catch (err) { if (err.status === 401) await waitForLogin(); }
+  }
+  if (!peopleReady() && !state.people.loading) {
+    if (state.people.loadError) { state.people.loadError = null; }
+    loadPeople();
+  } else if (peopleReady() && !state.people.snapshotted) {
+    takeSnapshot();
+  }
+  render();
+}
+
+async function takeSnapshot() {
+  const a = state.analytics;
+  const p = state.people;
+  if (a.snapshotting) return;
+  a.snapshotting = true;
+  a.error = null;
+  render();
+  try {
+    const res = await api("/api/analytics/snapshot", {
+      body: { followers: p.followers, following_count: p.following.length },
+    });
+    a.data = res.analytics;
+    a.change = res.change;
+    p.snapshotted = true;
+  } catch (err) {
+    a.error = err.message;
+    if (err.status === 401) await waitForLogin();
+  } finally {
+    a.snapshotting = false;
+    render();
+  }
+}
+
+$("#an-retry-btn").addEventListener("click", () => {
+  state.analytics.error = null;
+  if (state.people.loadError) loadPeople(); else takeSnapshot();
+});
+
+for (const tab of $$(".an-tab")) {
+  tab.addEventListener("click", () => {
+    state.analytics.tab = tab.dataset.an;
+    for (const t of $$(".an-tab")) t.classList.toggle("active", t === tab);
+    $("#an-search").value = "";
+    render();
+  });
+}
+$("#an-search").addEventListener("input", () => { currentView().lastClickedIndex = null; render(); });
+
+// Junta todos os "deixou de seguir" registrados, o mais recente primeiro.
+function analysisUnfollowers() {
+  const events = state.analytics.data?.events || [];
+  const seen = new Map();
+  for (let i = events.length - 1; i >= 0; i--) {
+    for (const u of events[i].lost) if (!seen.has(u.id)) seen.set(u.id, { ...u, at: events[i].at });
+  }
+  // Quem voltou a seguir depois sai da lista.
+  const followerIds = new Set(state.people.followers.map((u) => u.id));
+  return [...seen.values()].filter((u) => !followerIds.has(u.id));
+}
+
+function engagementPeople() {
+  const e = state.analytics.data?.engagement;
+  return e ? e.people : [];
+}
+
+function analysisGhosts() {
+  const e = state.analytics.data?.engagement;
+  if (!e) return [];
+  const active = new Set(e.people.map((u) => u.id));
+  return state.people.followers.filter((u) => !active.has(u.id));
+}
+
+function analysisFans() {
+  return [...engagementPeople()]
+    .sort((x, y) => (y.likes + y.comments * 2) - (x.likes + x.comments * 2))
+    .slice(0, 100);
+}
+
+function analysisRow(view, extra) {
+  return (u, index, selected) => {
+    const li = personRow(u, index, selected);
+    if (view.static) {
+      li.classList.add("static");
+      li.querySelector("input").remove();
+    }
+    const info = extra(u);
+    if (info.sub) li.querySelector(".thread-sub").textContent = info.sub;
+    for (const b of info.badges || []) li.querySelector(".thread-title").appendChild(badge(b));
+    return li;
+  };
+}
+
+function filterBySearch(list) {
+  const q = normalize($("#an-search").value.trim());
+  return q ? list.filter((u) => normalize(`${u.username} ${u.full_name}`).includes(q)) : list;
+}
+
+function renderAnalysis() {
+  const a = state.analytics;
+  const p = state.people;
+  const tab = a.tab;
+  const view = views[tab];
+  const busy = p.loading || a.snapshotting || (!peopleReady() && !p.loadError);
+  const error = p.loadError || a.error;
+
+  $("#an-help").textContent = AN_HELP[tab];
+  $("#an-loading").hidden = !busy;
+  if (busy) {
+    $("#an-loading-title").textContent = a.snapshotting
+      ? "Comparando com a última análise…"
+      : "Carregando seus seguidores…";
+    $("#an-loading-text").textContent = a.snapshotting
+      ? "Conferindo com o Instagram quem deixou de te seguir. Pode levar até um minuto."
+      : `Seguidores: ${fmt(p.followers.length)}${p.totals.followers != null ? ` de ${fmt(p.totals.followers)}` : ""}`
+        + ` · Seguindo: ${fmt(p.following.length)}${p.totals.following != null ? ` de ${fmt(p.totals.following)}` : ""}`;
+  }
+  $("#an-error").hidden = busy || !error;
+  $("#an-error-text").textContent = error || "";
+  const ready = !busy && !error;
+
+  const unfollowers = ready ? analysisUnfollowers() : [];
+  const ghosts = ready ? analysisGhosts() : [];
+  $("#count-an-unfollowers").textContent = ready && a.data?.has_baseline ? fmt(unfollowers.length) : "";
+  $("#count-an-ghosts").textContent = ready && a.data?.engagement ? fmt(ghosts.length) : "";
+
+  $("#an-summary").hidden = !ready || tab !== "summary";
+  $("#an-engagement-bar").hidden = !ready || !["ghosts", "fans"].includes(tab);
+  $("#an-stories-bar").hidden = !ready || tab !== "stories";
+  if (ready && tab === "summary") renderSummary();
+  if (ready && ["ghosts", "fans"].includes(tab)) renderEngagementBar();
+  if (ready && tab === "stories") renderStoriesBar();
+
+  let items = [];
+  let row = personRow;
+  let empty = "";
+  if (ready && tab === "unfollowers") {
+    items = unfollowers;
+    const followingIds = new Set(p.following.map((u) => u.id));
+    row = analysisRow(view, (u) => ({
+      sub: `Deixou de seguir até ${dayFmt.format(new Date(u.at))}` + (u.gone ? " · conta apagada ou desativada" : ""),
+      badges: followingIds.has(u.id) ? ["você ainda segue"] : [],
+    }));
+    empty = a.change?.first || !a.data?.has_baseline
+      ? "Primeira análise salva agora. A partir da próxima vez que você abrir esta aba, aparece aqui quem deixou de te seguir."
+      : "Ninguém deixou de te seguir desde que você começou a usar a Análise.";
+  } else if (ready && tab === "ghosts") {
+    const e = a.data?.engagement;
+    items = ghosts;
+    row = analysisRow(view, () => ({ sub: `Nenhuma curtida ou comentário nas últimas ${e?.posts.length} publicações` }));
+    empty = e ? "Nenhum fantasma: todos os seus seguidores interagiram com alguma publicação."
+      : "Clique em “Analisar publicações” para descobrir quem nunca interage com você.";
+  } else if (ready && tab === "fans") {
+    const followerIds = new Set(p.followers.map((u) => u.id));
+    items = analysisFans();
+    row = analysisRow(view, (u) => ({
+      sub: `${fmt(u.likes)} curtida(s) · ${fmt(u.comments)} publicação(ões) comentada(s)`,
+      badges: followerIds.has(u.id) ? [] : ["não te segue"],
+    }));
+    empty = a.data?.engagement ? "Ninguém curtiu ou comentou suas últimas publicações."
+      : "Clique em “Analisar publicações” para ver quem mais interage com você.";
+  } else if (ready && tab === "stories") {
+    const st = a.data?.stories;
+    items = st ? [...st.viewers].sort((x, y) => y.views - x.views || y.liked - x.liked) : [];
+    row = analysisRow(view, (u) => ({
+      sub: `Viu ${fmt(u.views)} de ${fmt(st.stories)} story(s)` + (u.liked ? ` · curtiu ${fmt(u.liked)}` : ""),
+    }));
+    empty = !st ? "Clique em “Ver quem viu” para carregar quem viu seus stories que estão no ar."
+      : st.stories ? "Ninguém viu seus stories ainda." : "Você não tem nenhum story no ar agora.";
+  }
+  items = filterBySearch(items);
+
+  const showList = ready && tab !== "summary";
+  $("#an-listbar").hidden = !showList || (!items.length && !$("#an-search").value);
+  $("#an-select-wrap").hidden = view.static;
+  $("#analysis-list").hidden = !showList;
+  renderRows(view, showList ? items : [], row);
+  $("#an-visible-count").textContent = fmt(items.length);
+  $("#an-empty").hidden = !showList || items.length > 0;
+  $("#an-empty").textContent = $("#an-search").value ? "Ninguém encontrado." : empty;
+}
+
+// ----- Resumo e gráficos
+
+function tile(label, value, sub) {
+  const el = document.createElement("div");
+  el.className = "tile";
+  const l = document.createElement("div"); l.className = "tile-label"; l.textContent = label;
+  const v = document.createElement("div"); v.className = "tile-value"; v.textContent = value;
+  const s = document.createElement("div"); s.className = "tile-sub"; s.textContent = sub || "";
+  el.append(l, v, s);
+  return el;
+}
+
+const signed = (n) => (n > 0 ? `+${fmt(n)}` : n < 0 ? `−${fmt(-n)}` : "0");
+
+function renderSummary() {
+  const a = state.analytics;
+  const d = a.data;
+  const p = state.people;
+  const history = d?.history || [];
+
+  // O que mudou desde a última vez
+  const news = $("#an-news");
+  const c = a.change;
+  if (c && c.first) {
+    news.textContent = "Primeira análise salva. Da próxima vez que você abrir esta aba, o app mostra quem deixou "
+      + "de te seguir e quem começou a seguir nesse meio tempo.";
+    news.hidden = false;
+  } else if (c) {
+    const prev = history.length > 1 ? history[history.length - 2].at : null;
+    const since = prev ? ` (${dayTimeFmt.format(new Date(prev))})` : "";
+    news.textContent = c.lost.length || c.gained.length
+      ? `Desde a última análise${since}: ${fmt(c.gained.length)} começaram a te seguir e `
+        + `${fmt(c.lost.length)} deixaram de seguir.`
+      : `Nada mudou nos seus seguidores desde a última análise${since}.`;
+    news.hidden = false;
+  } else {
+    news.hidden = true;
+  }
+
+  const first = history[0];
+  const totalLost = analysisUnfollowers().length;
+  const e = d?.engagement;
+  let engagement = "—";
+  let engagementSub = "Analise suas publicações na aba Fantasmas ou Top fãs";
+  if (e && e.posts.length && p.followers.length) {
+    const avg = e.posts.reduce((sum, x) => sum + x.likes + x.comments, 0) / e.posts.length;
+    engagement = `${(avg / p.followers.length * 100).toLocaleString("pt-BR", { maximumFractionDigits: 1 })}%`;
+    engagementSub = `média de ${fmt(Math.round(avg))} interações por publicação`;
+  }
+  $("#an-tiles").replaceChildren(
+    tile("Seguidores", fmt(p.followers.length),
+      first && history.length > 1 ? `${signed(p.followers.length - first.followers)} desde ${dayFmt.format(new Date(first.at))}` : ""),
+    tile("Seguindo", fmt(p.following.length), ""),
+    tile("Deixaram de seguir", d?.has_baseline ? fmt(totalLost) : "—",
+      first ? `desde ${dayFmt.format(new Date(first.at))}` : ""),
+    tile("Engajamento", engagement, engagementSub),
+  );
+
+  // Gráfico 1: seguidores ao longo do tempo
+  const followersEl = $("#chart-followers");
+  if (history.length >= 2) {
+    $("#chart-followers-sub").textContent = `${fmt(history.length)} análises desde ${dayFmt.format(new Date(first.at))}`;
+    lineChart(followersEl, history.map((h) => ({
+      x: new Date(h.at), y: h.followers, tip: `${dayTimeFmt.format(new Date(h.at))}\n${fmt(h.followers)} seguidores`,
+    })), ["Data", "Seguidores"], (pt) => [dayTimeFmt.format(pt.x), fmt(pt.y)]);
+  } else {
+    $("#chart-followers-sub").textContent = "";
+    chartEmpty(followersEl, "O gráfico aparece a partir da segunda análise. Abra esta aba de novo outro dia.");
+  }
+
+  // Gráfico 2: curtidas por publicação (da mais antiga para a mais nova)
+  const postsEl = $("#chart-posts");
+  if (e && e.posts.length) {
+    const posts = [...e.posts].reverse();
+    $("#chart-posts-sub").textContent = `Suas últimas ${posts.length} publicações, analisadas em ${dayTimeFmt.format(new Date(e.at))}`;
+    columnChart(postsEl, posts.map((x) => ({
+      label: x.taken_at ? shortDayFmt.format(new Date(x.taken_at)) : "",
+      value: x.likes,
+      tip: `${x.taken_at ? dayFmt.format(new Date(x.taken_at)) : "Publicação"}\n${fmt(x.likes)} curtidas · ${fmt(x.comments)} comentários`,
+      row: [x.taken_at ? dayFmt.format(new Date(x.taken_at)) : "", fmt(x.likes), fmt(x.comments)],
+    })), ["Publicação", "Curtidas", "Comentários"]);
+  } else {
+    $("#chart-posts-sub").textContent = "";
+    chartEmpty(postsEl, "Clique em “Analisar publicações” na aba Fantasmas ou Top fãs para ver este gráfico.");
+  }
+}
+
+function chartEmpty(el, text) {
+  const p = document.createElement("div");
+  p.className = "chart-empty";
+  p.textContent = text;
+  el.replaceChildren(p);
+}
+
+const SVG_NS = "http://www.w3.org/2000/svg";
+function svgEl(tag, attrs, text) {
+  const el = document.createElementNS(SVG_NS, tag);
+  for (const [k, v] of Object.entries(attrs || {})) el.setAttribute(k, v);
+  if (text !== undefined) el.textContent = text;
+  return el;
+}
+
+function niceNum(x) {
+  const exp = Math.floor(Math.log10(x));
+  const f = x / 10 ** exp;
+  return (f <= 1 ? 1 : f <= 2 ? 2 : f <= 5 ? 5 : 10) * 10 ** exp;
+}
+
+function niceTicks(min, max, count = 4) {
+  if (min === max) { min = Math.max(0, min - 1); max += 1; }
+  const step = niceNum((max - min) / count);
+  const lo = Math.floor(min / step) * step;
+  const hi = Math.ceil(max / step) * step;
+  const ticks = [];
+  for (let v = lo; v <= hi + step / 2; v += step) ticks.push(Math.round(v));
+  return ticks;
+}
+
+const compact = new Intl.NumberFormat("pt-BR", { notation: "compact", maximumFractionDigits: 1 });
+const tickLabel = (v, max) => (max >= 10000 ? compact.format(v) : fmt(v));
+
+function chartFrame(el, ticks) {
+  const W = Math.max(280, el.clientWidth || 600);
+  const H = 200;
+  const pad = { l: 44, r: 12, t: 10, b: 24 };
+  const svg = svgEl("svg", { viewBox: `0 0 ${W} ${H}`, role: "img" });
+  const lo = ticks[0];
+  const hi = ticks[ticks.length - 1];
+  const y = (v) => pad.t + (H - pad.t - pad.b) * (1 - (v - lo) / (hi - lo || 1));
+  for (const t of ticks) {
+    svg.appendChild(svgEl("line", { class: "grid-line", x1: pad.l, x2: W - pad.r, y1: y(t), y2: y(t) }));
+    svg.appendChild(svgEl("text", { class: "axis-text", x: pad.l - 6, y: y(t) + 4, "text-anchor": "end" }, tickLabel(t, hi)));
+  }
+  const tip = document.createElement("div");
+  tip.className = "chart-tip";
+  tip.hidden = true;
+  return { W, H, pad, svg, y, tip };
+}
+
+function showTip(el, f, tip, px, py, text) {
+  tip.textContent = "";
+  text.split("\n").forEach((line, i) => {
+    const div = document.createElement("div");
+    div.textContent = line;
+    if (i === 0) div.style.opacity = ".75";
+    tip.appendChild(div);
+  });
+  const scale = el.clientWidth / f.W;
+  tip.style.left = `${px * scale}px`;
+  tip.style.top = `${py * scale}px`;
+  tip.hidden = false;
+}
+
+function tableView(headers, rows) {
+  const details = document.createElement("details");
+  const summary = document.createElement("summary");
+  summary.className = "small muted";
+  summary.textContent = "Ver em tabela";
+  const table = document.createElement("table");
+  table.className = "data-table";
+  const tr = document.createElement("tr");
+  for (const h of headers) { const th = document.createElement("th"); th.textContent = h; tr.appendChild(th); }
+  table.appendChild(tr);
+  for (const r of rows) {
+    const row = document.createElement("tr");
+    for (const c of r) { const td = document.createElement("td"); td.textContent = c; row.appendChild(td); }
+    table.appendChild(row);
+  }
+  details.append(summary, table);
+  return details;
+}
+
+function lineChart(el, points, headers, rowFn) {
+  const ys = points.map((p) => p.y);
+  const ticks = niceTicks(Math.min(...ys), Math.max(...ys));
+  const f = chartFrame(el, ticks);
+  const t0 = points[0].x.getTime();
+  const t1 = points[points.length - 1].x.getTime();
+  const x = (d) => f.pad.l + (f.W - f.pad.l - f.pad.r) * ((d.getTime() - t0) / (t1 - t0 || 1));
+  const base = f.y(ticks[0]);
+  const line = points.map((p, i) => `${i ? "L" : "M"}${x(p.x).toFixed(1)},${f.y(p.y).toFixed(1)}`).join("");
+  f.svg.appendChild(svgEl("path", { class: "series-area", d: `${line}L${x(points[points.length - 1].x)},${base}L${x(points[0].x)},${base}Z` }));
+  f.svg.appendChild(svgEl("path", { class: "series-line", d: line }));
+  const last = points[points.length - 1];
+  f.svg.appendChild(svgEl("circle", { class: "series-dot", cx: x(last.x), cy: f.y(last.y), r: 4 }));
+  // Datas no eixo de baixo: primeira e última
+  for (const [p, anchor] of [[points[0], "start"], [last, "end"]]) {
+    f.svg.appendChild(svgEl("text", { class: "axis-text", x: x(p.x), y: f.H - 6, "text-anchor": anchor }, shortDayFmt.format(p.x)));
+  }
+  // Hover: linha vertical + ponto + balão no ponto mais próximo
+  const cross = svgEl("line", { class: "crosshair", y1: f.pad.t, y2: base, visibility: "hidden" });
+  const dot = svgEl("circle", { class: "series-dot", r: 5, visibility: "hidden" });
+  const hit = svgEl("rect", { class: "hit", x: f.pad.l, y: 0, width: f.W - f.pad.l - f.pad.r, height: f.H });
+  f.svg.append(cross, dot, hit);
+  const move = (ev) => {
+    const box = f.svg.getBoundingClientRect();
+    const mx = (ev.clientX - box.left) * (f.W / box.width);
+    let best = points[0];
+    for (const p of points) if (Math.abs(x(p.x) - mx) < Math.abs(x(best.x) - mx)) best = p;
+    const px = x(best.x);
+    const py = f.y(best.y);
+    for (const [k, v] of [["x1", px], ["x2", px]]) cross.setAttribute(k, v);
+    dot.setAttribute("cx", px); dot.setAttribute("cy", py);
+    cross.setAttribute("visibility", "visible"); dot.setAttribute("visibility", "visible");
+    showTip(el, f, f.tip, px, py, best.tip);
+  };
+  hit.addEventListener("pointermove", move);
+  hit.addEventListener("pointerdown", move);
+  hit.addEventListener("pointerleave", () => {
+    cross.setAttribute("visibility", "hidden"); dot.setAttribute("visibility", "hidden"); f.tip.hidden = true;
+  });
+  f.svg.setAttribute("aria-label", `Seguidores: de ${fmt(points[0].y)} para ${fmt(last.y)}`);
+  el.replaceChildren(f.svg, f.tip, tableView(headers, points.map(rowFn)));
+}
+
+function columnChart(el, bars, headers) {
+  const ticks = niceTicks(0, Math.max(...bars.map((b) => b.value), 1));
+  const f = chartFrame(el, ticks);
+  const band = (f.W - f.pad.l - f.pad.r) / bars.length;
+  const w = Math.min(24, band * 0.6);
+  const base = f.y(0);
+  bars.forEach((b, i) => {
+    const cx = f.pad.l + band * (i + 0.5);
+    const top = f.y(b.value);
+    const h = base - top;
+    const r = Math.min(4, h, w / 2);
+    // Topo arredondado, base reta
+    const d = h > 0
+      ? `M${cx - w / 2},${base}V${top + r}Q${cx - w / 2},${top} ${cx - w / 2 + r},${top}H${cx + w / 2 - r}`
+        + `Q${cx + w / 2},${top} ${cx + w / 2},${top + r}V${base}Z`
+      : "";
+    if (d) f.svg.appendChild(svgEl("path", { class: "series-bar", d }));
+    // Só a data de algumas colunas quando não cabe todas (cada uma precisa de uns 60px).
+    if (i % Math.max(1, Math.ceil(60 / band)) === 0) {
+      f.svg.appendChild(svgEl("text", { class: "axis-text", x: cx, y: f.H - 6, "text-anchor": "middle" }, b.label));
+    }
+    const hit = svgEl("rect", { class: "hit", x: cx - band / 2, y: f.pad.t, width: band, height: base - f.pad.t });
+    const show = () => showTip(el, f, f.tip, cx, top, b.tip);
+    hit.addEventListener("pointerenter", show);
+    hit.addEventListener("pointerdown", show);
+    hit.addEventListener("pointerleave", () => { f.tip.hidden = true; });
+    f.svg.appendChild(hit);
+  });
+  f.svg.setAttribute("aria-label", "Curtidas por publicação");
+  el.replaceChildren(f.svg, f.tip, tableView(headers, bars.map((b) => b.row)));
+}
+
+let resizeTimer = null;
+window.addEventListener("resize", () => {
+  clearTimeout(resizeTimer);
+  resizeTimer = setTimeout(() => {
+    if (state.section === "analysis" && state.analytics.tab === "summary") render();
+  }, 150);
+});
+
+// ----- Análise das publicações (fantasmas e top fãs)
+
+function renderEngagementBar() {
+  const a = state.analytics;
+  const e = a.data?.engagement;
+  const btn = $("#an-engagement-btn");
+  btn.disabled = a.engagementRunning;
+  $("#an-posts").disabled = a.engagementRunning;
+  const info = $("#an-engagement-info");
+  if (a.engagementRunning) {
+    const pr = a.engagementProgress;
+    info.textContent = pr && pr.total ? `Analisando publicação ${fmt(Math.min(pr.done + 1, pr.total))} de ${fmt(pr.total)}…`
+      : "Buscando suas publicações…";
+  } else if (e) {
+    const partial = e.posts.some((x) => x.likes > x.likers_listed * 1.1);
+    info.textContent = `Baseado nas suas últimas ${e.posts.length} publicações, analisadas em ${dayTimeFmt.format(new Date(e.at))}.`
+      + (partial ? " Em publicações com muitas curtidas o Instagram não mostra a lista inteira, então pode ter gente marcada como fantasma por engano." : "");
+  } else {
+    info.textContent = "Ainda não analisado.";
+  }
+}
+
+$("#an-engagement-btn").addEventListener("click", async () => {
+  const a = state.analytics;
+  a.engagementRunning = true;
+  a.engagementProgress = null;
+  render();
+  try {
+    await api("/api/analytics/engagement", { body: { posts: Number($("#an-posts").value) } });
+    for (;;) {
+      await sleep(1000);
+      const task = await api("/api/analytics/engagement");
+      a.engagementProgress = task;
+      if (task.status === "done") {
+        a.data = { ...a.data, engagement: task.result };
+        break;
+      }
+      if (task.status === "error") throw new Error(task.message || "Erro na análise.");
+      if (state.section === "analysis") renderEngagementBar();
+    }
+  } catch (err) {
+    toast(err.message, 6000);
+  } finally {
+    a.engagementRunning = false;
+    render();
+  }
+});
+
+// ----- Quem viu os stories
+
+function renderStoriesBar() {
+  const a = state.analytics;
+  const st = a.data?.stories;
+  $("#an-stories-btn").disabled = a.storiesLoading;
+  $("#an-stories-btn").textContent = st ? "Atualizar" : "Ver quem viu";
+  $("#an-stories-info").textContent = a.storiesLoading ? "Carregando…"
+    : st ? `${fmt(st.stories)} story(s) no ar · ${fmt(st.viewers.length)} pessoa(s) viram · atualizado em ${dayTimeFmt.format(new Date(st.at))}`
+      : "";
+}
+
+$("#an-stories-btn").addEventListener("click", async () => {
+  const a = state.analytics;
+  a.storiesLoading = true;
+  render();
+  try {
+    const st = await api("/api/analytics/stories");
+    a.data = { ...a.data, stories: st };
+  } catch (err) {
+    toast(err.message, 6000);
+    if (err.status === 401) await waitForLogin();
+  } finally {
+    a.storiesLoading = false;
+    render();
+  }
+});
 
 // ------------------------------------------------------------- Início ---
 
