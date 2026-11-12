@@ -64,10 +64,10 @@
     <aside class="sidebar">
       <div class="logo" aria-hidden="true">DM</div>
       <nav class="side-nav" role="tablist" aria-label="Seções">
-        <button class="section-tab active" data-section="dms" data-label="Mensagens" aria-label="Mensagens"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 11.5a8.4 8.4 0 0 1-9 8.4 9 9 0 0 1-3.9-.9L3 20l1.1-4.2A8.2 8.2 0 0 1 3 11.5 8.6 8.6 0 0 1 12 3a8.6 8.6 0 0 1 9 8.5Z"/></svg></button>
+        <button class="section-tab active" data-section="analysis" data-label="Análise" aria-label="Análise"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 3v18h18"/><path d="M7 15v2M11 11v6M15 7v10M19 12v5"/></svg></button>
+        <button class="section-tab" data-section="dms" data-label="Mensagens" aria-label="Mensagens"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 11.5a8.4 8.4 0 0 1-9 8.4 9 9 0 0 1-3.9-.9L3 20l1.1-4.2A8.2 8.2 0 0 1 3 11.5 8.6 8.6 0 0 1 12 3a8.6 8.6 0 0 1 9 8.5Z"/></svg></button>
         <button class="section-tab" data-section="nfb" data-label="Não me seguem de volta" aria-label="Não me seguem de volta"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 11h-6"/></svg><span class="side-badge" id="count-nfb"></span></button>
         <button class="section-tab" data-section="fnb" data-label="Não sigo de volta" aria-label="Não sigo de volta"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M19 8v6M22 11h-6"/></svg><span class="side-badge" id="count-fnb"></span></button>
-        <button class="section-tab" data-section="analysis" data-label="Análise" aria-label="Análise"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 3v18h18"/><path d="M7 15v2M11 11v6M15 7v10M19 12v5"/></svg></button>
       </nav>
       <div class="side-bottom">
         <button class="side-btn" id="theme-btn" data-label="Tema" aria-label="Trocar tema"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 3a9 9 0 0 1 0 18Z" fill="currentColor"/></svg></button>
@@ -78,14 +78,14 @@
     <main class="main">
       <header class="page-head">
         <div>
-          <h1 id="page-title">Mensagens</h1>
-          <p class="muted" id="page-sub">Todas as suas conversas. Selecione e exclua de uma vez.</p>
+          <h1 id="page-title">Análise</h1>
+          <p class="muted" id="page-sub">Seguidores, engajamento e quem interage com você.</p>
         </div>
         <div class="me-chip"><span class="me-avatar" id="me-avatar">@</span><span id="me-username"></span></div>
       </header>
 
     <!-- Mensagens -->
-    <div id="section-dms">
+    <div id="section-dms" hidden>
       <div class="toolbar">
         <div class="tabs" role="tablist">
           <button class="tab active" data-folder="inbox">Conversas <span class="count" id="count-inbox">0</span></button>
@@ -175,7 +175,7 @@
     </div>
 
     <!-- Análise -->
-    <div id="section-analysis" hidden>
+    <div id="section-analysis">
       <div class="toolbar">
         <div class="tabs" role="tablist">
           <button class="tab an-tab active" data-an="summary">Resumo</button>

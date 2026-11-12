@@ -4,7 +4,7 @@ const $ = (sel) => document.querySelector(sel);
 const $$ = (sel) => Array.from(document.querySelectorAll(sel));
 
 const state = {
-  section: "dms", // dms | nfb (não me seguem de volta) | fnb (não sigo de volta)
+  section: "analysis", // analysis | dms | nfb (não me seguem de volta) | fnb (não sigo de volta)
   delays: {},
   // Mensagens
   folder: "inbox",
@@ -194,8 +194,7 @@ function routeLogin(login, job) {
     $("#me-avatar").textContent = (login.username || "@").charAt(0).toUpperCase();
     $("#hero-title").textContent = `Olá, @${login.username}`;
     show("app");
-    if (!state.threads.inbox.length && !state.loading) loadAll();
-    if (state.section !== "dms" && !peopleReady() && !state.people.loading) loadPeople();
+    showSection(state.section);
     if (job && job.status === "running") watchJob();
   } else if (login.status === "need_2fa" || login.status === "need_challenge") {
     const help = login.status === "need_2fa"
@@ -271,20 +270,24 @@ const PAGE_TITLES = {
   analysis: ["Análise", "Seguidores, engajamento e quem interage com você."],
 };
 
+function showSection(section) {
+  state.section = section;
+  const [title, sub] = PAGE_TITLES[section];
+  $("#page-title").textContent = title;
+  $("#page-sub").textContent = sub;
+  for (const t of $$(".section-tab")) t.classList.toggle("active", t.dataset.section === section);
+  $("#section-dms").hidden = section !== "dms";
+  $("#section-people").hidden = !["nfb", "fnb"].includes(section);
+  $("#section-analysis").hidden = section !== "analysis";
+  // Cada seção só carrega o que precisa quando é aberta.
+  if (section === "dms" && !state.threads.inbox.length && !state.loading && !state.loadError) loadAll();
+  if (section === "analysis") enterAnalysis();
+  if (section !== "dms" && !peopleReady() && !state.people.loading && !state.people.loadError) loadPeople();
+  render();
+}
+
 for (const tab of $$(".section-tab")) {
-  tab.addEventListener("click", () => {
-    state.section = tab.dataset.section;
-    const [title, sub] = PAGE_TITLES[state.section];
-    $("#page-title").textContent = title;
-    $("#page-sub").textContent = sub;
-    for (const t of $$(".section-tab")) t.classList.toggle("active", t === tab);
-    $("#section-dms").hidden = state.section !== "dms";
-    $("#section-people").hidden = !["nfb", "fnb"].includes(state.section);
-    $("#section-analysis").hidden = state.section !== "analysis";
-    if (state.section === "analysis") enterAnalysis();
-    if (state.section !== "dms" && !peopleReady() && !state.people.loading && !state.people.loadError) loadPeople();
-    render();
-  });
+  tab.addEventListener("click", () => showSection(tab.dataset.section));
 }
 
 function render() {
