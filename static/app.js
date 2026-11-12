@@ -397,11 +397,11 @@ for (const el of ["#search", "#filter-type", "#filter-age", "#filter-last"]) {
   $(el).addEventListener("input", () => { views.dms.lastClickedIndex = null; render(); });
 }
 
-for (const tab of $$(".tab")) {
+for (const tab of $$(".tab[data-folder]")) {
   tab.addEventListener("click", () => {
     state.folder = tab.dataset.folder;
     views.dms.lastClickedIndex = null;
-    for (const t of $$(".tab")) t.classList.toggle("active", t === tab);
+    for (const t of $$(".tab[data-folder]")) t.classList.toggle("active", t === tab);
     render();
   });
 }
@@ -1124,7 +1124,7 @@ function renderAnalysis() {
   const showList = ready && tab !== "summary";
   $("#an-listbar").hidden = !showList || (!items.length && !$("#an-search").value);
   $("#an-select-wrap").hidden = view.static;
-  $("#analysis-list").hidden = !showList;
+  $("#analysis-list").hidden = !showList || !items.length;
   renderRows(view, showList ? items : [], row);
   $("#an-visible-count").textContent = fmt(items.length);
   $("#an-empty").hidden = !showList || items.length > 0;
@@ -1488,6 +1488,144 @@ $("#theme-btn").addEventListener("click", () => {
 });
 darkQuery.addEventListener("change", () => { if (themePref() === "auto") applyTheme(); });
 applyTheme();
+
+// ---------------------------------------------- Caixas de seleção ---
+// A lista que o navegador abre para um <select> não aceita estilo. Cada <select>
+// ganha um botão e uma lista próprios; o <select> original continua escondido
+// guardando o valor, então o resto do código segue lendo .value normalmente.
+
+const CHEVRON = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>';
+const CHECK = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg>';
+let openSelect = null;
+
+function enhanceSelect(sel) {
+  const wrap = document.createElement("div");
+  wrap.className = "select";
+  sel.parentNode.insertBefore(wrap, sel);
+  wrap.appendChild(sel);
+  sel.classList.add("select-native");
+  sel.tabIndex = -1;
+  sel.setAttribute("aria-hidden", "true");
+
+  const listId = `${sel.id || "select"}-menu`;
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "select-trigger";
+  btn.setAttribute("aria-haspopup", "listbox");
+  btn.setAttribute("aria-expanded", "false");
+  btn.setAttribute("aria-controls", listId);
+  if (sel.title) btn.setAttribute("aria-label", sel.title);
+  const label = document.createElement("span");
+  label.className = "select-value";
+  btn.appendChild(label);
+  btn.insertAdjacentHTML("beforeend", CHEVRON);
+
+  const menu = document.createElement("ul");
+  menu.className = "select-menu";
+  menu.id = listId;
+  menu.setAttribute("role", "listbox");
+  menu.hidden = true;
+  wrap.append(btn, menu);
+
+  let active = 0;
+
+  const sync = () => {
+    label.textContent = sel.options[sel.selectedIndex]?.text || "";
+    btn.disabled = sel.disabled;
+  };
+
+  const setActive = (i) => {
+    const items = menu.children;
+    active = Math.max(0, Math.min(items.length - 1, i));
+    [...items].forEach((li, k) => li.classList.toggle("active", k === active));
+    items[active]?.scrollIntoView({ block: "nearest" });
+    if (items[active]) menu.setAttribute("aria-activedescendant", items[active].id);
+  };
+
+  const close = (focusButton) => {
+    if (menu.hidden) return;
+    wrap.classList.remove("open");
+    btn.setAttribute("aria-expanded", "false");
+    menu.classList.remove("show");
+    // Espera a animação de fechar antes de esconder.
+    setTimeout(() => { if (!wrap.classList.contains("open")) menu.hidden = true; }, 160);
+    if (openSelect === close) openSelect = null;
+    if (focusButton) btn.focus();
+  };
+
+  const choose = (i) => {
+    if (sel.selectedIndex !== i) {
+      sel.selectedIndex = i;
+      sel.dispatchEvent(new Event("input", { bubbles: true }));
+      sel.dispatchEvent(new Event("change", { bubbles: true }));
+    }
+    sync();
+    close(true);
+  };
+
+  const open = () => {
+    if (btn.disabled) return;
+    if (openSelect) openSelect(false);
+    menu.replaceChildren(...[...sel.options].map((opt, i) => {
+      const li = document.createElement("li");
+      li.id = `${listId}-${i}`;
+      li.setAttribute("role", "option");
+      li.setAttribute("aria-selected", String(i === sel.selectedIndex));
+      li.style.setProperty("--i", i);
+      li.insertAdjacentHTML("beforeend", CHECK);
+      li.append(document.createTextNode(opt.text));
+      li.addEventListener("pointerenter", () => setActive(i));
+      li.addEventListener("click", () => choose(i));
+      return li;
+    }));
+    menu.hidden = false;
+    // Abre para cima se não couber embaixo.
+    const box = btn.getBoundingClientRect();
+    const needed = Math.min(menu.scrollHeight, 320) + 12;
+    wrap.classList.toggle("up", window.innerHeight - box.bottom < needed && box.top > needed);
+    wrap.classList.add("open");
+    btn.setAttribute("aria-expanded", "true");
+    requestAnimationFrame(() => menu.classList.add("show"));
+    setActive(sel.selectedIndex);
+    openSelect = close;
+  };
+
+  btn.addEventListener("click", () => (menu.hidden ? open() : close(true)));
+  btn.addEventListener("keydown", (e) => {
+    const isOpen = !menu.hidden;
+    if (["ArrowDown", "ArrowUp", "Enter", " "].includes(e.key) && !isOpen) {
+      e.preventDefault();
+      open();
+      return;
+    }
+    if (!isOpen) return;
+    if (e.key === "ArrowDown") { e.preventDefault(); setActive(active + 1); }
+    else if (e.key === "ArrowUp") { e.preventDefault(); setActive(active - 1); }
+    else if (e.key === "Home") { e.preventDefault(); setActive(0); }
+    else if (e.key === "End") { e.preventDefault(); setActive(menu.children.length - 1); }
+    else if (e.key === "Enter" || e.key === " ") { e.preventDefault(); choose(active); }
+    else if (e.key === "Escape") { e.preventDefault(); close(true); }
+    else if (e.key === "Tab") close(false);
+  });
+  sel.addEventListener("change", sync);
+  new MutationObserver(sync).observe(sel, { attributes: true, attributeFilter: ["disabled"] });
+  sync();
+}
+
+document.addEventListener("pointerdown", (e) => {
+  if (openSelect && !e.target.closest(".select.open")) openSelect(false);
+});
+window.addEventListener("resize", () => { if (openSelect) openSelect(false); });
+$$("select").forEach(enhanceSelect);
+
+// Brilho do vidro que acompanha o mouse nos botões.
+document.addEventListener("pointermove", (e) => {
+  const el = e.target.closest(".btn, .tab, .section-tab, .side-btn, .select-trigger");
+  if (!el) return;
+  const r = el.getBoundingClientRect();
+  el.style.setProperty("--mx", `${((e.clientX - r.left) / r.width) * 100}%`);
+  el.style.setProperty("--my", `${((e.clientY - r.top) / r.height) * 100}%`);
+});
 
 // ------------------------------------------------------------- Início ---
 
