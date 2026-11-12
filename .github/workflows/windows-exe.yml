@@ -1,0 +1,76 @@
+name: Gerar .exe para Windows
+
+on:
+  push:
+    branches: [main, claude/instagram-dm-bulk-delete-upgrnq]
+    paths:
+      - "app.py"
+      - "static/**"
+      - "requirements.txt"
+      - ".github/workflows/windows-exe.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: windows-exe
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Instalar dependências
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt pyinstaller==6.22.3
+
+      - name: Montar o .exe
+        run: pyinstaller --noconfirm --onefile --name LimpadorDeDMs --add-data "static;static" --collect-all curl_cffi app.py
+
+      - name: Testar se o .exe abre
+        shell: pwsh
+        run: |
+          $env:NO_BROWSER = "1"
+          Start-Process -FilePath dist\LimpadorDeDMs.exe | Out-Null
+          $ok = $false
+          for ($i = 0; $i -lt 45; $i++) {
+            Start-Sleep -Seconds 2
+            try {
+              $r = Invoke-WebRequest -Uri http://127.0.0.1:8765/api/status -UseBasicParsing -TimeoutSec 5
+              if ($r.StatusCode -eq 200) { $ok = $true; break }
+            } catch {}
+          }
+          Get-Process LimpadorDeDMs -ErrorAction SilentlyContinue | Stop-Process -Force
+          if (-not $ok) { throw "O .exe não respondeu" }
+          Write-Host "O .exe abriu e respondeu."
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: LimpadorDeDMs
+          path: dist/LimpadorDeDMs.exe
+
+      - name: Publicar na página de downloads
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release delete app --yes --cleanup-tag || true
+          gh release create app dist/LimpadorDeDMs.exe \
+            --title "Limpador de DMs para Windows" \
+            --target "$GITHUB_SHA" \
+            --latest \
+            --notes "Baixe o LimpadorDeDMs.exe e dê dois cliques. O navegador abre sozinho.
+
+          Na primeira vez o Windows pode mostrar \"O Windows protegeu o seu PC\": clique em Mais informações e depois em Executar assim mesmo (o programa não é assinado digitalmente).
+
+          O login e o histórico ficam só no seu computador, na pasta %LOCALAPPDATA%\\LimpadorDeDMs.
+
+          Gerado a partir do commit ${GITHUB_SHA::7}."

@@ -16,6 +16,8 @@ import logging
 import os
 import queue
 import random
+import socket
+import sys
 import threading
 import time
 import webbrowser
@@ -39,8 +41,16 @@ from instagrapi.exceptions import (
 HOST = "127.0.0.1"
 PORT = int(os.environ.get("PORT", "8765"))
 BASE_DIR = Path(__file__).resolve().parent
-SESSION_FILE = BASE_DIR / "session.json"
-STATIC_DIR = BASE_DIR / "static"
+if getattr(sys, "frozen", False):
+    # Rodando como .exe: a interface vem embutida no programa e o login/histórico
+    # ficam numa pasta do usuário (o .exe pode estar em Downloads, por exemplo).
+    STATIC_DIR = Path(sys._MEIPASS) / "static"
+    USER_DIR = Path(os.environ.get("LOCALAPPDATA") or Path.home()) / "LimpadorDeDMs"
+    USER_DIR.mkdir(parents=True, exist_ok=True)
+else:
+    STATIC_DIR = BASE_DIR / "static"
+    USER_DIR = BASE_DIR
+SESSION_FILE = USER_DIR / "session.json"
 
 # Pausa (segundos) entre cada exclusão, para não parecer robô para o Instagram.
 DELETE_DELAY = (
@@ -659,7 +669,7 @@ def api_delete_cancel():
 # Análise do perfil (histórico salvo só neste computador)
 # --------------------------------------------------------------------------- #
 
-DATA_DIR = BASE_DIR / "dados"
+DATA_DIR = USER_DIR / "dados"
 MAX_HISTORY = 500
 MAX_EVENTS = 300
 # Quantos "deixou de seguir" conferimos um a um com o Instagram a cada análise.
@@ -934,15 +944,37 @@ def static_files(name):
     return send_from_directory(STATIC_DIR, name)
 
 
+def _already_running() -> bool:
+    try:
+        with socket.create_connection((HOST, PORT), timeout=0.5):
+            return True
+    except OSError:
+        return False
+
+
 def main():
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-    threading.Thread(target=_restore_session, daemon=True).start()
     url = f"http://{HOST}:{PORT}"
+    open_browser = os.environ.get("NO_BROWSER") != "1"
+    if _already_running():
+        # Abriu o app de novo: só mostra a janela que já está rodando.
+        print(f"\n  O Limpador de DMs já está aberto em {url}\n")
+        if open_browser:
+            webbrowser.open(url)
+        return
+    threading.Thread(target=_restore_session, daemon=True).start()
     print(f"\n  Limpador de DMs rodando em {url}\n  (feche esta janela ou aperte Ctrl+C para parar)\n")
-    if os.environ.get("NO_BROWSER") != "1":
+    if open_browser:
         threading.Timer(1.0, lambda: webbrowser.open(url)).start()
     app.run(host=HOST, port=PORT, debug=False, threaded=True)
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception:  # noqa: BLE001
+        log.exception("O app parou com um erro")
+        if getattr(sys, "frozen", False):
+            # No .exe a janela fecharia na hora e ninguém veria o erro.
+            input("\nDeu erro (veja acima). Aperte Enter para fechar...")
+        raise

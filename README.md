@@ -67,7 +67,18 @@ mensagem que **você** mandou (ela some para os dois lados) e só depois exclui 
 O visual tem modo **claro** e **escuro**: o botão de tema no menu lateral alterna entre
 automático (segue o sistema), claro e escuro, e o app lembra a escolha.
 
-## Como usar
+## Jeito mais fácil (Windows): baixar o .exe
+
+1. Baixe o **[LimpadorDeDMs.exe](https://github.com/gabrielsruizz-creator/instagram-dms/releases/latest/download/LimpadorDeDMs.exe)**.
+2. Dê dois cliques. O navegador abre sozinho em <http://127.0.0.1:8765>.
+3. Se aparecer **“O Windows protegeu o seu PC”**, clique em **Mais informações → Executar assim mesmo**
+   (aparece porque o programa não é assinado digitalmente, o que custa caro).
+
+Não precisa instalar Python nem nada. O login e o histórico ficam em
+`%LOCALAPPDATA%\LimpadorDeDMs` no seu computador. O .exe é gerado automaticamente pelo GitHub a cada
+atualização do código.
+
+## Como usar (pelo código)
 
 Você precisa do **Python entre 3.10 e 3.14**. Versões mais novas ainda não funcionam porque
 algumas dependências não têm pacote pronto para elas. No Windows, o jeito mais fácil é rodar no
